@@ -1,0 +1,119 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id               String           @id @default(uuid())
+  email            String           @unique
+  password         String
+  name             String
+  role             String           @default("USER") // "USER" or "ADMIN"
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  testAttempts     TestAttempt[]
+  selectedWords    SelectedWord[]
+  userVocabularies UserVocabulary[]
+}
+
+model Test {
+  id           String        @id @default(uuid())
+  title        String
+  description  String?
+  published    Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  parts        TestPart[]
+  testAttempts TestAttempt[]
+}
+
+model TestPart {
+  id          String     @id @default(uuid())
+  testId      String
+  test        Test       @relation(fields: [testId], references: [id], onDelete: Cascade)
+  partNumber  Int // Part 1 - 7
+  title       String
+  instructions String?
+  audioUrl    String?
+  questions   Question[]
+}
+
+model Question {
+  id             String         @id @default(uuid())
+  testPartId     String
+  testPart       TestPart       @relation(fields: [testPartId], references: [id], onDelete: Cascade)
+  questionNumber Int
+  passage        String? // For Part 6/7 readings
+  questionText   String
+  image          String? // Base64 or path to image
+  transcript     String? // For Parts 1-4 Listening scripts
+  audioUrl       String? // Dynamic audio per item if needed
+  correctAnswer  String // "A", "B", "C", "D"
+  options        Option[]
+  answers        Answer[]
+  selectedWords  SelectedWord[]
+}
+
+model Option {
+  id         String   @id @default(uuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  letter     String // "A", "B", "C", "D"
+  text       String
+}
+
+model TestAttempt {
+  id            String         @id @default(uuid())
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testId        String
+  test          Test           @relation(fields: [testId], references: [id], onDelete: Cascade)
+  score         Int            @default(0)
+  status        String         @default("STARTED") // "STARTED", "COMPLETED"
+  startedAt     DateTime       @default(now())
+  completedAt   DateTime?
+  answers       Answer[]
+  selectedWords SelectedWord[]
+}
+
+model Answer {
+  id             String      @id @default(uuid())
+  testAttemptId  String
+  testAttempt    TestAttempt @relation(fields: [testAttemptId], references: [id], onDelete: Cascade)
+  questionId     String
+  question       Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedOption String // "A", "B", "C", "D"
+  isCorrect      Boolean
+}
+
+model SelectedWord {
+  id              String      @id @default(uuid())
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testAttemptId   String
+  testAttempt     TestAttempt @relation(fields: [testAttemptId], references: [id], onDelete: Cascade)
+  questionId      String
+  question        Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  word            String
+  sentenceContext String
+  partNumber      Int
+  createdAt       DateTime    @default(now())
+}
+
+model UserVocabulary {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  word            String
+  sentenceContext String?
+  partNumber      Int?
+  status          String   @default("new") // "new", "learning", "mastered"
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, word])
+}
