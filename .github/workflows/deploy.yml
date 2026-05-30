@@ -23,7 +23,7 @@ jobs:
           script: |
             cd ${{ secrets.APP_DIR }}
             git pull origin main
-            docker compose down
-            docker compose up -d --build
-            docker compose ps
+            docker-compose down
+            docker-compose up -d --build
+            docker-compose ps
             curl -sf http://localhost:4000/health || exit 1
