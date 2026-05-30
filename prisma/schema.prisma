@@ -1,10 +1,11 @@
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 generator client {
   provider = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
 }
 
 model User {
@@ -12,50 +13,101 @@ model User {
   email            String           @unique
   password         String
   name             String
-  role             String           @default("USER") // "USER" or "ADMIN"
+  dateOfBirth      DateTime?
+  gender           String?
+  role             String           @default("USER")
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
   testAttempts     TestAttempt[]
   selectedWords    SelectedWord[]
   userVocabularies UserVocabulary[]
+  ingestionJobs    IngestionJob[]
 }
 
 model Test {
-  id           String        @id @default(uuid())
-  title        String
-  description  String?
-  published    Boolean       @default(false)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  parts        TestPart[]
-  testAttempts TestAttempt[]
+  id            String         @id @default(uuid())
+  title         String
+  description   String?
+  examType      String         @default("TOEIC")
+  published     Boolean        @default(false)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  parts         TestPart[]
+  testAttempts  TestAttempt[]
+  uploadedFiles UploadedFile[]
+  ingestionJobs IngestionJob[]
+}
+
+enum IngestionStatus {
+  QUEUED
+  EXTRACTING
+  CLASSIFYING
+  REVIEW_REQUIRED
+  IMPORTING
+  DONE
+  FAILED
+}
+
+enum IngestionFileRole {
+  EXAM_DOC
+  LISTENING_KEY_DOC
+  READING_KEY_IMAGE
+  AUDIO_FILE
+  UNKNOWN
+}
+
+model UploadedFile {
+  id            String   @id @default(uuid())
+  testId        String
+  test          Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  fileType      String   // EXAM_PDF, KEY_LC_PDF, KEY_RC_IMAGE, AUDIO_MP3
+  fileName      String
+  filePath      String
+  extractedText String?  @db.Text
+  mimeType      String
+  createdAt     DateTime @default(now())
 }
 
 model TestPart {
-  id          String     @id @default(uuid())
-  testId      String
-  test        Test       @relation(fields: [testId], references: [id], onDelete: Cascade)
-  partNumber  Int // Part 1 - 7
-  title       String
-  instructions String?
-  audioUrl    String?
-  questions   Question[]
+  id             String          @id @default(uuid())
+  testId         String
+  test           Test            @relation(fields: [testId], references: [id], onDelete: Cascade)
+  partNumber     Int
+  title          String
+  instructions   String?
+  audioUrl       String?
+  questions      Question[]
+  questionGroups QuestionGroup[]
+}
+
+model QuestionGroup {
+  id         String   @id @default(uuid())
+  testPartId String
+  testPart   TestPart @relation(fields: [testPartId], references: [id], onDelete: Cascade)
+  passage    String?  @db.Text
+  transcript String?  @db.Text
+  audioUrl   String?
+  imageUrl   String?
+  groupOrder Int      @default(0)
+  questions  Question[]
 }
 
 model Question {
-  id             String         @id @default(uuid())
-  testPartId     String
-  testPart       TestPart       @relation(fields: [testPartId], references: [id], onDelete: Cascade)
-  questionNumber Int
-  passage        String? // For Part 6/7 readings
-  questionText   String
-  image          String? // Base64 or path to image
-  transcript     String? // For Parts 1-4 Listening scripts
-  audioUrl       String? // Dynamic audio per item if needed
-  correctAnswer  String // "A", "B", "C", "D"
-  options        Option[]
-  answers        Answer[]
-  selectedWords  SelectedWord[]
+  id              String         @id @default(uuid())
+  testPartId      String
+  testPart        TestPart       @relation(fields: [testPartId], references: [id], onDelete: Cascade)
+  questionGroupId String?
+  questionGroup   QuestionGroup? @relation(fields: [questionGroupId], references: [id], onDelete: SetNull)
+  questionNumber  Int
+  passage         String?        @db.Text
+  questionText    String
+  image           String?
+  transcript      String?        @db.Text
+  audioUrl        String?
+  correctAnswer   String
+  options         Option[]
+  answers         Answer[]
+  selectedWords   SelectedWord[]
 }
 
 model Option {
@@ -116,4 +168,50 @@ model UserVocabulary {
   updatedAt       DateTime @updatedAt
 
   @@unique([userId, word])
+}
+
+model IngestionJob {
+  id             String          @id @default(uuid())
+  testId         String
+  createdById    String
+  status         IngestionStatus @default(QUEUED)
+  progressStep   String?
+  confidence     Float?
+  reviewRequired Boolean         @default(false)
+  errorMessage   String?         @db.Text
+  resultSummary  String?         @db.Text
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  test       Test            @relation(fields: [testId], references: [id], onDelete: Cascade)
+  createdBy  User            @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  files      IngestionFile[]
+  draft      IngestionDraft?
+}
+
+model IngestionFile {
+  id                String            @id @default(uuid())
+  ingestionJobId    String
+  originalName      String
+  mimeType          String
+  storageKey        String
+  detectedRole      IngestionFileRole @default(UNKNOWN)
+  confidence        Float?
+  extractionSummary String?           @db.Text
+  createdAt         DateTime          @default(now())
+
+  ingestionJob IngestionJob @relation(fields: [ingestionJobId], references: [id], onDelete: Cascade)
+}
+
+model IngestionDraft {
+  id                 String   @id @default(uuid())
+  ingestionJobId     String   @unique
+  canonicalJson      Json
+  classificationJson Json?
+  parsedToeicJson    Json?
+  reviewPayload      Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  ingestionJob IngestionJob @relation(fields: [ingestionJobId], references: [id], onDelete: Cascade)
 }

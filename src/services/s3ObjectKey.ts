@@ -1,0 +1,56 @@
+import path from "path";
+
+export type ExamFileType = "EXAM_PDF" | "KEY_LC_PDF" | "KEY_RC_IMAGE" | "AUDIO_MP3";
+
+export type ExamSlug = "toeic" | "ielts";
+
+export function examSlug(examType: string): ExamSlug {
+  const normalized = examType.trim().toUpperCase();
+  if (normalized === "TOEIC") return "toeic";
+  if (normalized === "IELTS") return "ielts";
+  throw new Error(`examType không hỗ trợ: ${examType}`);
+}
+
+function normalizeExt(ext: string): string {
+  const trimmed = ext.trim().toLowerCase();
+  if (!trimmed.startsWith(".")) {
+    throw new Error(`Phần mở rộng file phải bắt đầu bằng dấu chấm, nhận được: ${ext}`);
+  }
+  return trimmed;
+}
+
+/** Raw upload path before role classification (multi-file intake). */
+export function buildIntakeObjectKey(
+  examType: string,
+  testId: string,
+  originalName: string
+): string {
+  const exam = examSlug(examType);
+  const ext = path.extname(originalName) || ".bin";
+  const baseName =
+    path.basename(originalName, ext).replace(/[^a-zA-Z0-9._-]/g, "_") || "file";
+  return `intake/${exam}/${testId}/${Date.now()}-${baseName}${ext}`;
+}
+
+export function buildObjectKey(
+  examType: string,
+  testId: string,
+  fileType: ExamFileType,
+  ext: string
+): string {
+  const exam = examSlug(examType);
+  const normalizedExt = normalizeExt(ext);
+
+  switch (fileType) {
+    case "EXAM_PDF":
+      return `exams/${exam}/${testId}/exam${normalizedExt}`;
+    case "KEY_LC_PDF":
+      return `answers/${exam}/${testId}/key-lc${normalizedExt}`;
+    case "KEY_RC_IMAGE":
+      return `images/${exam}/${testId}/key-rc${normalizedExt}`;
+    case "AUDIO_MP3":
+      return `audio/${exam}/${testId}/listening${normalizedExt}`;
+    default:
+      throw new Error(`fileType không hỗ trợ: ${fileType}`);
+  }
+}

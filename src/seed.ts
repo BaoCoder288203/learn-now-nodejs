@@ -5,11 +5,11 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
   try {
     const userCount = await prisma.user.count();
     if (userCount > 0) {
-      console.log("Database already populated. Skipping automatic seeding.");
+      console.log("Cơ sở dữ liệu đã có dữ liệu. Bỏ qua khởi tạo mẫu.");
       return;
     }
 
-    console.log("Database is empty. Initiating automatic seeding...");
+    console.log("Cơ sở dữ liệu trống. Bắt đầu khởi tạo dữ liệu mẫu...");
 
     const hashedPassword = await bcrypt.hash("user123", 10);
     const hashedAdminPassword = await bcrypt.hash("admin123", 10);
@@ -18,7 +18,7 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       data: {
         email: "user@toeic.com",
         password: hashedPassword,
-        name: "Mock Learner",
+        name: "Học viên Demo",
         role: "USER",
       },
     });
@@ -27,20 +27,20 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       data: {
         email: "admin@toeic.com",
         password: hashedAdminPassword,
-        name: "System Director",
+        name: "Quản trị viên",
         role: "ADMIN",
       },
     });
 
-    console.log(`Created accounts:
-      - Student: user@toeic.com / user123
-      - Admin: admin@toeic.com / admin123`);
+    console.log(`Đã tạo tài khoản:
+      - Học viên: user@toeic.com / user123
+      - Quản trị: admin@toeic.com / admin123`);
 
     const test = await prisma.test.create({
       data: {
-        title: "TOEIC Diagnostic Practice Test #1",
+        title: "Đề thi TOEIC Chẩn đoán #1",
         description:
-          "A fast full-spectrum TOEIC review test including all listening and reading sections (Part 1 to Part 7) to check baseline scores.",
+          "Đề thi TOEIC tổng hợp bao gồm tất cả phần Nghe và Đọc (Part 1 đến Part 7) để đánh giá trình độ cơ sở.",
         published: true,
       },
     });
@@ -49,9 +49,9 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       data: {
         testId: test.id,
         partNumber: 1,
-        title: "Part 1: Photographs",
+        title: "Part 1: Mô tả Hình ảnh",
         instructions:
-          "Look at the description of the illustration. Select the option that best describes the scene.",
+          "Xem mô tả hình ảnh. Chọn đáp án mô tả chính xác nhất cảnh trong hình.",
       },
     });
     const q1 = await prisma.question.create({
@@ -79,9 +79,9 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       data: {
         testId: test.id,
         partNumber: 2,
-        title: "Part 2: Question-Response",
+        title: "Part 2: Hỏi - Đáp",
         instructions:
-          "You will hear a question or statement and three responses. Select the best response.",
+          "Bạn sẽ nghe một câu hỏi hoặc phát biểu và ba lựa chọn trả lời. Chọn câu trả lời phù hợp nhất.",
       },
     });
     const q2 = await prisma.question.create({
@@ -107,9 +107,9 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       data: {
         testId: test.id,
         partNumber: 3,
-        title: "Part 3: Conversations",
+        title: "Part 3: Hội thoại",
         instructions:
-          "Listen to a dialogue between two or more people. Answer the comprehension questions.",
+          "Nghe đoạn hội thoại giữa hai hoặc nhiều người. Trả lời các câu hỏi hiểu bài.",
       },
     });
     const q3 = await prisma.question.create({
@@ -135,8 +135,8 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       data: {
         testId: test.id,
         partNumber: 4,
-        title: "Part 4: Short Talks",
-        instructions: "Listen to a short monologue or talk. Select the appropriate options.",
+        title: "Part 4: Bài nói ngắn",
+        instructions: "Nghe bài nói ngắn hoặc thông báo. Chọn đáp án phù hợp.",
       },
     });
     const q4 = await prisma.question.create({
@@ -162,9 +162,9 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       data: {
         testId: test.id,
         partNumber: 5,
-        title: "Part 5: Incomplete Sentences",
+        title: "Part 5: Hoàn thành Câu",
         instructions:
-          "Select the option that best completes the sentence. (Note: Inside reading views, feel free to highlight any difficult vocabulary words to automatically capture them!).",
+          "Chọn đáp án phù hợp nhất để hoàn thành câu. (Lưu ý: Trong phần đọc, bạn có thể nhấn vào từ vựng khó để đánh dấu ôn tập!)",
       },
     });
     const q5 = await prisma.question.create({
@@ -177,7 +177,7 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       },
     });
     for (const [letter, text] of Object.entries({
-      A: "additional",
+      A: "additionally",
       B: "addition",
       C: "additional",
       D: "additionary",
@@ -189,9 +189,9 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       data: {
         testId: test.id,
         partNumber: 6,
-        title: "Part 6: Text Completion",
+        title: "Part 6: Điền vào Đoạn văn",
         instructions:
-          "Read the passage and select the best words or phrases to complete the blanks.",
+          "Đọc đoạn văn và chọn từ hoặc cụm từ phù hợp nhất để điền vào chỗ trống.",
       },
     });
     const q6 = await prisma.question.create({
@@ -218,9 +218,9 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       data: {
         testId: test.id,
         partNumber: 7,
-        title: "Part 7: Reading Comprehension",
+        title: "Part 7: Đọc hiểu",
         instructions:
-          "Read the article or dialog and select the correct answers based on the context.",
+          "Đọc bài báo hoặc đoạn hội thoại và chọn đáp án đúng dựa trên ngữ cảnh.",
       },
     });
     const q7 = await prisma.question.create({
@@ -243,8 +243,8 @@ export async function seedDatabaseIfEmpty(): Promise<void> {
       await prisma.option.create({ data: { questionId: q7.id, letter, text } });
     }
 
-    console.log("Automatic database seed completed successfully.");
+    console.log("Khởi tạo dữ liệu mẫu hoàn tất.");
   } catch (error) {
-    console.error("Critical: automatic database seeding failed:", error);
+    console.error("Lỗi nghiêm trọng: khởi tạo dữ liệu mẫu thất bại:", error);
   }
 }

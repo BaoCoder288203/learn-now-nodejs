@@ -1,7 +1,19 @@
-import { Response, Request } from "express";
+import { Response } from "express";
+import path from "path";
 import { prisma } from "../db.js";
 import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
 import { parseToeicContent } from "../services/geminiService.js";
+import {
+  processToeicExam,
+  type UploadedFileRef,
+} from "../services/examProcessingService.js";
+import { buildIntakeObjectKey, buildObjectKey, type ExamFileType } from "../services/s3ObjectKey.js";
+import { uploadObject } from "../services/s3Service.js";
+import {
+  importAfterReview,
+  runDocumentIngestionJob,
+  type UploadedBatchFile,
+} from "../services/documentIngestionService.js";
 
 // Toggle test publish status
 export async function togglePublishTest(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -11,7 +23,7 @@ export async function togglePublishTest(req: AuthenticatedRequest, res: Response
   try {
     const test = await prisma.test.update({
       where: { id: testId },
-      data: { published: published === true }
+      data: { published: published === true },
     });
 
     res.json({ message: `Test ${published ? "published" : "unpublished"} successfully.`, test });
@@ -29,32 +41,22 @@ export async function editQuestion(req: AuthenticatedRequest, res: Response): Pr
   try {
     const question = await prisma.question.update({
       where: { id: questionId },
-      data: {
-        questionText,
-        passage,
-        transcript,
-        correctAnswer
-      }
+      data: { questionText, passage, transcript, correctAnswer },
     });
 
-    // Update letters if options provided
     if (options && Array.isArray(options)) {
       for (const opt of options) {
         const existingOpt = await prisma.option.findFirst({
-          where: { questionId, letter: opt.letter }
+          where: { questionId, letter: opt.letter },
         });
         if (existingOpt) {
           await prisma.option.update({
             where: { id: existingOpt.id },
-            data: { text: opt.text }
+            data: { text: opt.text },
           });
         } else {
           await prisma.option.create({
-            data: {
-              questionId,
-              letter: opt.letter,
-              text: opt.text
-            }
+            data: { questionId, letter: opt.letter, text: opt.text },
           });
         }
       }
@@ -69,7 +71,7 @@ export async function editQuestion(req: AuthenticatedRequest, res: Response): Pr
 
 // Create clean manual test structure
 export async function createTestManually(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const { title, description, parts } = req.body;
+  const { title, description, examType, parts } = req.body;
 
   if (!title) {
     res.status(400).json({ error: "Title is required for manually created tests." });
@@ -81,16 +83,18 @@ export async function createTestManually(req: AuthenticatedRequest, res: Respons
       data: {
         title,
         description: description || "",
-        published: false
-      }
+        examType: examType || "TOEIC",
+        published: false,
+      },
     });
 
-    // Seed empty mock parts 1-7 automatically for convenience when doing manual building
-    const partsArray = parts || [1, 2, 3, 4, 5, 6, 7].map(num => ({
-      partNumber: num,
-      title: `Part ${num}: ${getPartTitleFallback(num)}`,
-      instructions: `Practice Part ${num} questions.`
-    }));
+    const partsArray =
+      parts ||
+      [1, 2, 3, 4, 5, 6, 7].map((num) => ({
+        partNumber: num,
+        title: `Part ${num}: ${getPartTitleFallback(num)}`,
+        instructions: `Luyện tập Part ${num}.`,
+      }));
 
     for (const part of partsArray) {
       await prisma.testPart.create({
@@ -98,8 +102,8 @@ export async function createTestManually(req: AuthenticatedRequest, res: Respons
           testId: test.id,
           partNumber: part.partNumber,
           title: part.title,
-          instructions: part.instructions || ""
-        }
+          instructions: part.instructions || "",
+        },
       });
     }
 
@@ -116,25 +120,20 @@ export async function getUserStatistics(req: AuthenticatedRequest, res: Response
     const attempts = await prisma.testAttempt.findMany({
       include: {
         user: { select: { name: true, email: true } },
-        test: { select: { title: true } }
+        test: { select: { title: true } },
       },
-      orderBy: { startedAt: "desc" }
+      orderBy: { startedAt: "desc" },
     });
 
-    // General numbers
     const totalAttempts = attempts.length;
-    const completedAttempts = attempts.filter(a => a.status === "COMPLETED");
+    const completedAttempts = attempts.filter((a) => a.status === "COMPLETED");
     const avgScore = completedAttempts.length
       ? Math.round(completedAttempts.reduce((sum, a) => sum + a.score, 0) / completedAttempts.length)
       : 0;
 
     res.json({
-      summary: {
-        totalAttempts,
-        completedAttempts: completedAttempts.length,
-        avgScore
-      },
-      attempts
+      summary: { totalAttempts, completedAttempts: completedAttempts.length, avgScore },
+      attempts,
     });
   } catch (error) {
     console.error("Get statistics error:", error);
@@ -142,7 +141,7 @@ export async function getUserStatistics(req: AuthenticatedRequest, res: Response
   }
 }
 
-// Import TOEIC structure from image or OCR direct paste
+// Legacy: Import TOEIC structure from image or OCR direct paste
 export async function importToeicExamViaAi(req: AuthenticatedRequest, res: Response): Promise<void> {
   const { testId, ocrText, imageBase64, mimeType } = req.body;
 
@@ -159,15 +158,11 @@ export async function importToeicExamViaAi(req: AuthenticatedRequest, res: Respo
     }
 
     const imagePayload = imageBase64 ? { data: imageBase64, mimeType: mimeType || "image/png" } : undefined;
-
-    // Use Gemini parsing service
     const aiParsedData = await parseToeicContent(ocrText || "", imagePayload);
-
     const partNum = aiParsedData.partNumber || 5;
 
-    // Retrieve or seed appropriate TestPart model to bind questions
     let devPart = await prisma.testPart.findFirst({
-      where: { testId, partNumber: partNum }
+      where: { testId, partNumber: partNum },
     });
 
     if (!devPart) {
@@ -176,14 +171,13 @@ export async function importToeicExamViaAi(req: AuthenticatedRequest, res: Respo
           testId,
           partNumber: partNum,
           title: `Part ${partNum}: ${getPartTitleFallback(partNum)}`,
-          instructions: `AI Generated Practice for Part ${partNum}`
-        }
+          instructions: `AI Generated Practice for Part ${partNum}`,
+        },
       });
     }
 
     const insertedQuestions = [];
 
-    // Transactionally create all questions received to avoid partial creations
     for (const q of aiParsedData.questions) {
       const dbQuestion = await prisma.question.create({
         data: {
@@ -192,30 +186,20 @@ export async function importToeicExamViaAi(req: AuthenticatedRequest, res: Respo
           passage: q.passage || null,
           questionText: q.questionText || "Select the best word of response.",
           transcript: q.transcript || null,
-          correctAnswer: q.correctAnswer || "A"
-        }
+          correctAnswer: q.correctAnswer || "A",
+        },
       });
 
-      // Insert multiple choice options
       if (q.options && Array.isArray(q.options)) {
         for (const opt of q.options) {
           await prisma.option.create({
-            data: {
-              questionId: dbQuestion.id,
-              letter: opt.letter.toUpperCase(),
-              text: opt.text
-            }
+            data: { questionId: dbQuestion.id, letter: opt.letter.toUpperCase(), text: opt.text },
           });
         }
       } else {
-        // Generate placeholder options if missing
         for (const letChar of ["A", "B", "C", "D"]) {
           await prisma.option.create({
-            data: {
-              questionId: dbQuestion.id,
-              letter: letChar,
-              text: `Option ${letChar}`
-            }
+            data: { questionId: dbQuestion.id, letter: letChar, text: `Option ${letChar}` },
           });
         }
       }
@@ -226,25 +210,291 @@ export async function importToeicExamViaAi(req: AuthenticatedRequest, res: Respo
       message: "AI Import successful and loaded into database.",
       partNumber: partNum,
       questionsCount: insertedQuestions.length,
-      questions: insertedQuestions
+      questions: insertedQuestions,
     });
-
   } catch (error) {
     console.error("Import exam error:", error);
-    res.status(500).json({ error: `Parsing and import failed: ${error instanceof Error ? error.message : String(error)}` });
+    res.status(500).json({
+      error: `Parsing and import failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
   }
 }
 
-// Utility to fetch default description for Part Fallback Names
+// ---------------------------------------------------------------------------
+// NEW: Upload files + AI processing pipeline for full TOEIC exam import
+// ---------------------------------------------------------------------------
+
+export async function uploadAndProcessExam(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const { testId } = req.params;
+
+  try {
+    const test = await prisma.test.findUnique({ where: { id: testId } });
+    if (!test) {
+      res.status(404).json({ error: "Không tìm thấy đề thi." });
+      return;
+    }
+
+    if (test.examType.toUpperCase() !== "TOEIC") {
+      res.status(400).json({ error: "Import AI hiện chỉ hỗ trợ TOEIC." });
+      return;
+    }
+
+    const multerFiles = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+    if (!multerFiles) {
+      res.status(400).json({ error: "Không tìm thấy file upload." });
+      return;
+    }
+
+    const fileRefs: UploadedFileRef[] = [];
+
+    const fileTypeMap: Record<string, ExamFileType> = {
+      examPdf: "EXAM_PDF",
+      keyLcPdf: "KEY_LC_PDF",
+      keyRcImage: "KEY_RC_IMAGE",
+      audioMp3: "AUDIO_MP3",
+    };
+
+    for (const [fieldName, fileType] of Object.entries(fileTypeMap)) {
+      const uploaded = multerFiles[fieldName]?.[0];
+      if (!uploaded?.buffer) continue;
+
+      const ext = path.extname(uploaded.originalname) || ".bin";
+      const s3Key = buildObjectKey(test.examType, testId, fileType, ext);
+
+      await uploadObject(s3Key, uploaded.buffer, uploaded.mimetype);
+
+      await prisma.uploadedFile.create({
+        data: {
+          testId,
+          fileType,
+          fileName: uploaded.originalname,
+          filePath: s3Key,
+          mimeType: uploaded.mimetype,
+        },
+      });
+
+      fileRefs.push({
+        fileType,
+        s3Key,
+        mimeType: uploaded.mimetype,
+      });
+    }
+
+    if (fileRefs.length < 3) {
+      res.status(400).json({
+        error: "Cần upload ít nhất 3 file: đề thi (PDF), KEY LC (PDF), KEY RC (ảnh).",
+      });
+      return;
+    }
+
+    const progressLog: { step: string; detail: string }[] = [];
+
+    const result = await processToeicExam(testId, fileRefs, (p) => {
+      progressLog.push(p);
+    });
+
+    res.json({
+      message: `Import thành công! Tổng cộng ${result.totalQuestions} câu hỏi.`,
+      totalQuestions: result.totalQuestions,
+      partsSummary: result.partsSummary,
+      progressLog,
+    });
+  } catch (error) {
+    console.error("Upload and process exam error:", error);
+    res.status(500).json({
+      error: `Xử lý đề thi thất bại: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// New: Single multi-file ingestion job (MinerU + review gate)
+// ---------------------------------------------------------------------------
+export async function createImportJob(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const { testId } = req.params;
+  const userId = req.user?.id;
+
+  if (!userId) {
+    res.status(401).json({ error: "Không xác định được người dùng." });
+    return;
+  }
+
+  try {
+    const test = await prisma.test.findUnique({ where: { id: testId } });
+    if (!test) {
+      res.status(404).json({ error: "Không tìm thấy đề thi." });
+      return;
+    }
+    if (test.examType.toUpperCase() !== "TOEIC") {
+      res.status(400).json({ error: "Import hiện chỉ hỗ trợ TOEIC." });
+      return;
+    }
+
+    const files = (req.files as Express.Multer.File[] | undefined) || [];
+    if (!files.length) {
+      res.status(400).json({ error: "Không có file upload." });
+      return;
+    }
+    const pdfFiles = files.filter((f) => f.mimetype === "application/pdf");
+    const mp3Files = files.filter((f) => f.mimetype === "audio/mpeg" || f.mimetype === "audio/mp3");
+    if (pdfFiles.length < 2) {
+      res.status(400).json({
+        error: "Cần ít nhất 2 file PDF (đề thi + đáp án/key). Nếu bạn có ảnh, hãy chuyển ảnh thành PDF trước khi upload.",
+      });
+      return;
+    }
+    if (mp3Files.length < 1) {
+      res.status(400).json({
+        error: "Cần ít nhất 1 file MP3 cho phần nghe (Part 1-4).",
+      });
+      return;
+    }
+
+    const job = await prisma.ingestionJob.create({
+      data: {
+        testId,
+        createdById: userId,
+        status: "QUEUED",
+        progressStep: "Queued",
+      },
+    });
+
+    const uploadBatchFiles: UploadedBatchFile[] = [];
+
+    for (const file of files) {
+      const s3Key = buildIntakeObjectKey(test.examType, testId, file.originalname);
+      await uploadObject(s3Key, file.buffer, file.mimetype);
+
+      await prisma.ingestionFile.create({
+        data: {
+          ingestionJobId: job.id,
+          originalName: file.originalname,
+          mimeType: file.mimetype,
+          storageKey: s3Key,
+        },
+      });
+
+      uploadBatchFiles.push({
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        storageKey: s3Key,
+        buffer: file.buffer,
+      });
+    }
+
+    void runDocumentIngestionJob(job.id, testId, uploadBatchFiles).catch(async (error) => {
+      console.error("Background ingestion job error:", error);
+      await prisma.ingestionJob.update({
+        where: { id: job.id },
+        data: {
+          status: "FAILED",
+          errorMessage: error instanceof Error ? error.message : String(error),
+          progressStep: "Failed",
+        },
+      });
+    });
+
+    res.status(201).json({
+      jobId: job.id,
+      status: "QUEUED",
+      reviewRequired: false,
+    });
+  } catch (error) {
+    console.error("Create import job error:", error);
+    res.status(500).json({
+      error: `Tạo import job thất bại: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+}
+
+export async function getImportJob(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const { jobId } = req.params;
+  try {
+    const job = await prisma.ingestionJob.findUnique({
+      where: { id: jobId },
+      include: { files: true, draft: true, test: { select: { id: true, title: true } } },
+    });
+    if (!job) {
+      res.status(404).json({ error: "Không tìm thấy import job." });
+      return;
+    }
+    res.json(job);
+  } catch (error) {
+    console.error("Get import job error:", error);
+    res.status(500).json({ error: "Không thể tải trạng thái import job." });
+  }
+}
+
+export async function submitImportReview(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const { jobId } = req.params;
+  const { assignments } = req.body as {
+    assignments?: Array<{ fileId: string; role: "EXAM_DOC" | "LISTENING_KEY_DOC" | "READING_KEY_IMAGE" | "AUDIO_FILE" | "UNKNOWN" }>;
+  };
+
+  try {
+    const job = await prisma.ingestionJob.findUnique({
+      where: { id: jobId },
+      include: { files: true },
+    });
+    if (!job) {
+      res.status(404).json({ error: "Không tìm thấy import job." });
+      return;
+    }
+
+    if (assignments?.length) {
+      for (const assign of assignments) {
+        await prisma.ingestionFile.update({
+          where: { id: assign.fileId },
+          data: { detectedRole: assign.role, confidence: 1 },
+        });
+      }
+    }
+
+    await prisma.ingestionJob.update({
+      where: { id: jobId },
+      data: {
+        status: "IMPORTING",
+        reviewRequired: false,
+        progressStep: "Importing after review",
+        errorMessage: null,
+      },
+    });
+
+    void importAfterReview(jobId, job.testId).catch(async (error) => {
+      console.error("Import after review error:", error);
+      await prisma.ingestionJob.update({
+        where: { id: jobId },
+        data: {
+          status: "FAILED",
+          errorMessage: error instanceof Error ? error.message : String(error),
+          progressStep: "Failed",
+        },
+      });
+    });
+
+    const updated = await prisma.ingestionJob.findUnique({
+      where: { id: jobId },
+      include: { draft: true, files: true },
+    });
+    res.json(updated ?? { id: jobId, status: "IMPORTING", reviewRequired: false });
+  } catch (error) {
+    console.error("Submit import review error:", error);
+    res.status(500).json({
+      error: `Xác nhận review thất bại: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+}
+
+// Utility
 function getPartTitleFallback(num: number): string {
   switch (num) {
-    case 1: return "Photographs";
-    case 2: return "Question-Response";
-    case 3: return "Conversations";
-    case 4: return "Short Talks";
-    case 5: return "Incomplete Sentences";
-    case 6: return "Text Completion";
-    case 7: return "Reading Comprehension";
-    default: return "TOEIC Section";
+    case 1: return "Mô tả Hình ảnh";
+    case 2: return "Hỏi - Đáp";
+    case 3: return "Hội thoại";
+    case 4: return "Bài nói ngắn";
+    case 5: return "Hoàn thành Câu";
+    case 6: return "Điền vào Đoạn văn";
+    case 7: return "Đọc hiểu";
+    default: return "Phần TOEIC";
   }
 }

@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   api:
     build:
@@ -14,8 +12,43 @@ services:
       - JWT_SECRET=${JWT_SECRET:-toeic_secret_access_token_key_2026}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-toeic_secret_refresh_token_key_2026}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - GEMINI_MODEL_FALLBACKS=${GEMINI_MODEL_FALLBACKS:-gemini-2.0-flash,gemini-2.0-flash-lite}
+      - GEMINI_MAX_OUTPUT_TOKENS=${GEMINI_MAX_OUTPUT_TOKENS:-65536}
+      - DATABASE_URL=postgresql://nguyentrongbao:123456@db:5432/learn_now_db
+      - REDIS_URL=redis://redis:6379
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+
+  db:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: nguyentrongbao
+      POSTGRES_PASSWORD: "123456"
+      POSTGRES_DB: learn_now_db
     volumes:
-      - sqlite_data:/app/prisma
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
 
 volumes:
-  sqlite_data:
+  pgdata:
+  redisdata:

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import path from "path";
 import apiRouter from "./routes/api.js";
 import { seedDatabaseIfEmpty } from "./seed.js";
 
@@ -23,7 +24,9 @@ async function startApiServer(): Promise<void> {
       credentials: true,
     })
   );
-  app.use(express.json({ limit: "20mb" }));
+  app.use(express.json({ limit: "50mb" }));
+
+  app.use("/uploads", express.static(path.resolve("uploads")));
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });

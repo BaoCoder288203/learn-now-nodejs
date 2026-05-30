@@ -1,6 +1,7 @@
 import { Response } from "express";
 import { prisma } from "../db.js";
 import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
+import { getPresignedGetUrl, isS3Key } from "../services/s3Service.js";
 
 // Retrieve list of published tests
 export async function getTests(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -42,17 +43,24 @@ export async function getTestDetails(req: AuthenticatedRequest, res: Response): 
         parts: {
           orderBy: { partNumber: "asc" },
           include: {
+            questionGroups: {
+              orderBy: { groupOrder: "asc" },
+              include: {
+                questions: {
+                  orderBy: { questionNumber: "asc" },
+                  include: { options: { orderBy: { letter: "asc" } } },
+                },
+              },
+            },
             questions: {
               orderBy: { questionNumber: "asc" },
               include: {
-                options: {
-                  orderBy: { letter: "asc" }
-                }
-              }
-            }
-          }
-        }
-      }
+                options: { orderBy: { letter: "asc" } },
+              },
+            },
+          },
+        },
+      },
     });
 
     if (!test) {
@@ -60,7 +68,19 @@ export async function getTestDetails(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
-    res.json(test);
+    const partsWithSignedAudio = await Promise.all(
+      test.parts.map(async (part) => {
+        if (part.audioUrl && isS3Key(part.audioUrl)) {
+          return {
+            ...part,
+            audioUrl: await getPresignedGetUrl(part.audioUrl, 7200),
+          };
+        }
+        return part;
+      })
+    );
+
+    res.json({ ...test, parts: partsWithSignedAudio });
   } catch (error) {
     console.error("Get test details error:", error);
     res.status(500).json({ error: "Failed to load test structure." });
@@ -84,15 +104,33 @@ export async function startTestAttempt(req: AuthenticatedRequest, res: Response)
       return;
     }
 
-    const attempt = await prisma.testAttempt.create({
-      data: {
-        userId,
-        testId,
-        status: "STARTED",
+    let resumed = false;
+    const attempt = await prisma.$transaction(async (tx) => {
+      const startedAttempts = await tx.testAttempt.findMany({
+        where: { userId, testId, status: "STARTED" },
+        orderBy: { startedAt: "desc" },
+      });
+
+      if (startedAttempts.length > 0) {
+        resumed = true;
+        const primary = startedAttempts[0]!;
+        if (startedAttempts.length > 1) {
+          const duplicateIds = startedAttempts.slice(1).map((a) => a.id);
+          await tx.testAttempt.deleteMany({ where: { id: { in: duplicateIds } } });
+        }
+        return primary;
       }
+
+      return tx.testAttempt.create({
+        data: { userId, testId, status: "STARTED" },
+      });
     });
 
-    res.status(201).json({ message: "Test started", attemptId: attempt.id });
+    if (resumed) {
+      res.json({ message: "Resuming existing attempt", attemptId: attempt.id });
+    } else {
+      res.status(201).json({ message: "Test started", attemptId: attempt.id });
+    }
   } catch (error) {
     console.error("Start test attempt error:", error);
     res.status(500).json({ error: "Failed to initiate test attempt." });
@@ -241,25 +279,38 @@ export async function finishTestAttempt(req: AuthenticatedRequest, res: Response
       (totalReading > 0 ? (correctReading / totalReading) * 495 : 0)
     );
 
-    const completedAttempt = await prisma.testAttempt.update({
-      where: { id: attemptId },
-      data: {
-        status: "COMPLETED",
-        score: finalScore || 0,
-        completedAt: new Date()
-      },
-      include: {
-        answers: {
-          include: {
-            question: {
-              include: {
-                options: true,
-                testPart: true
-              }
-            }
-          }
-        }
-      }
+    const completedAttempt = await prisma.$transaction(async (tx) => {
+      const completed = await tx.testAttempt.update({
+        where: { id: attemptId },
+        data: {
+          status: "COMPLETED",
+          score: finalScore || 0,
+          completedAt: new Date(),
+        },
+        include: {
+          answers: {
+            include: {
+              question: {
+                include: {
+                  options: true,
+                  testPart: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      await tx.testAttempt.deleteMany({
+        where: {
+          userId: attempt.userId,
+          testId: attempt.testId,
+          status: "STARTED",
+          id: { not: attemptId },
+        },
+      });
+
+      return completed;
     });
 
     res.json({ message: "Test finished", attempt: completedAttempt });
@@ -299,6 +350,51 @@ export async function getSelectedWordsByAttempt(req: AuthenticatedRequest, res: 
   }
 }
 
+// Get a single completed attempt with full answers (for result page)
+export async function getAttemptResult(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const { attemptId } = req.params;
+  const userId = req.user?.id;
+
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  try {
+    const attempt = await prisma.testAttempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        answers: {
+          include: {
+            question: {
+              include: {
+                options: true,
+                testPart: true
+              }
+            }
+          }
+        },
+        test: { select: { title: true, description: true } }
+      }
+    });
+
+    if (!attempt) {
+      res.status(404).json({ error: "Không tìm thấy phiên thi." });
+      return;
+    }
+
+    if (attempt.userId !== userId) {
+      res.status(403).json({ error: "Bạn không có quyền xem kết quả này." });
+      return;
+    }
+
+    res.json({ attempt });
+  } catch (error) {
+    console.error("Get attempt result error:", error);
+    res.status(500).json({ error: "Không thể tải kết quả bài thi." });
+  }
+}
+
 // Get historic attempts for the user
 export async function getUserAttempts(req: AuthenticatedRequest, res: Response): Promise<void> {
   const userId = req.user?.id;
@@ -315,14 +411,40 @@ export async function getUserAttempts(req: AuthenticatedRequest, res: Response):
         test: {
           select: {
             title: true,
-            description: true
-          }
-        }
+            description: true,
+          },
+        },
+        _count: { select: { answers: true } },
       },
-      orderBy: { startedAt: "desc" }
+      orderBy: { startedAt: "desc" },
     });
 
-    res.json(attempts);
+    const testsWithCompleted = new Set(
+      attempts.filter((a) => a.status === "COMPLETED").map((a) => a.testId)
+    );
+
+    const latestStartedByTest = new Map<string, string>();
+    for (const att of attempts) {
+      if (att.status === "STARTED" && !latestStartedByTest.has(att.testId)) {
+        latestStartedByTest.set(att.testId, att.id);
+      }
+    }
+
+    const filtered = attempts.filter((att) => {
+      if (att.status !== "STARTED") return true;
+
+      if (latestStartedByTest.get(att.testId) !== att.id) return false;
+
+      if (testsWithCompleted.has(att.testId) && att._count.answers === 0) {
+        return false;
+      }
+
+      return true;
+    });
+
+    res.json(
+      filtered.map(({ _count, ...att }) => att)
+    );
   } catch (error) {
     console.error("getUserAttempts Error", error);
     res.status(500).json({ error: "Failed to load user attempts" });
