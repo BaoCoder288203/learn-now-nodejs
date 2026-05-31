@@ -8,7 +8,7 @@ import { seedDatabaseIfEmpty } from "./seed.js";
 function parseCorsOrigins(): string | string[] {
   const raw = process.env.CORS_ORIGIN;
   if (!raw) {
-    return ["http://localhost:5173", "http://localhost:3000"];
+    return ["http://localhost:5173", "http://localhost:3000", "https://learnnow.jobsnow.id.vn"];
   }
   const origins = raw.split(",").map((o) => o.trim()).filter(Boolean);
   return origins.length === 1 ? origins[0]! : origins;

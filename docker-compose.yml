@@ -8,7 +8,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
-      - CORS_ORIGIN=http://localhost:5173
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:5173}
       - JWT_SECRET=${JWT_SECRET:-toeic_secret_access_token_key_2026}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-toeic_secret_refresh_token_key_2026}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
