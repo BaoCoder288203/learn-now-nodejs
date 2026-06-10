@@ -54,3 +54,24 @@ export function buildObjectKey(
       throw new Error(`fileType không hỗ trợ: ${fileType}`);
   }
 }
+
+/** Passage/photograph image rendered from exam PDF during import. */
+export function buildPassageGroupImageKey(
+  examType: string,
+  testId: string,
+  partNumber: number,
+  groupOrder: number
+): string {
+  const exam = examSlug(examType);
+  return `passages/${exam}/${testId}/part-${partNumber}/group-${groupOrder}.png`;
+}
+
+/** Part 1 photograph per question. */
+export function buildPart1QuestionImageKey(
+  examType: string,
+  testId: string,
+  questionNumber: number
+): string {
+  const exam = examSlug(examType);
+  return `passages/${exam}/${testId}/part-1/q-${questionNumber}.png`;
+}

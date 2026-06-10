@@ -34,9 +34,10 @@ GitHub Actions (SSH vào EC2)
        ↓
 EC2 Ubuntu
   ├─ docker compose
-  │   ├─ api      (Node.js 20, port 4000)
-  │   ├─ db       (PostgreSQL 15)
-  │   └─ redis    (Redis 7)
+  │   ├─ api         (Node.js 20, port 4000)
+  │   ├─ markitdown  (Python MarkItDown sidecar, port 8080)
+  │   ├─ db          (PostgreSQL 15)
+  │   └─ redis       (Redis 7)
   ├─ Nginx        (reverse proxy 80/443 → localhost:4000)
   └─ Certbot      (SSL Let's Encrypt)
 
@@ -187,9 +188,24 @@ CORS_ORIGIN=https://learnnow.jobsnow.id.vn,http://localhost:5173
 JWT_SECRET=your_strong_jwt_secret
 JWT_REFRESH_SECRET=your_strong_refresh_secret
 
-# Gemini (bắt buộc nếu dùng admin AI import)
+# AI import TOEIC — dual provider (OpenAI ưu tiên, Gemini fallback khi 429/quota)
+AI_PROVIDER=auto
+OPENAI_API_KEY=your_openai_key
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_MODEL_FALLBACKS=gpt-4o,gpt-4.1
+
 GEMINI_API_KEY=your_gemini_key
 GEMINI_MODEL=gemini-2.5-flash
+
+# MarkItDown (trong Docker Compose: http://markitdown:8080)
+MARKITDOWN_URL=http://markitdown:8080
+
+# Headroom (Compose: http://headroom:8787)
+HEADROOM_ENABLED=true
+HEADROOM_BASE_URL=http://headroom:8787
+ALIBABA_MAX_OUTPUT_TOKENS=8192
+OPENAI_MAX_OUTPUT_TOKENS=16384
+GEMINI_MAX_OUTPUT_TOKENS=8192
 
 # AWS S3 (bắt buộc nếu dùng upload file)
 AWS_ACCESS_KEY_ID=your_key
@@ -218,7 +234,19 @@ docker compose up -d
 | Biến | Mô tả | Ghi chú |
 |------|-------|---------|
 | `CORS_ORIGIN` | URL frontend được phép gọi API | Phải khớp domain FE |
-| `GEMINI_API_KEY` | Google Gemini OCR import | Admin feature |
+| `AI_PROVIDER` | `auto` \| `alibaba` \| `deepseek` \| `openai` \| `gemini` | `auto` + `AI_PROVIDER_ORDER` |
+| `AI_PROVIDER_ORDER` | Thứ tự fallback | Mặc định `alibaba,deepseek,openai,gemini` |
+| `ALIBABA_API_KEY` | Alibaba Model Studio (Qwen) | OpenAI-compatible base URL |
+| `DEEPSEEK_API_KEY` | DeepSeek API | Base `https://api.deepseek.com`, model `deepseek-v4-flash` |
+| `OPENAI_API_KEY` | OpenAI (fallback) | |
+| `GEMINI_API_KEY` | Google Gemini (fallback) | |
+| `AI_ENABLE_STREAMING` | Stream JSON, partial handoff | Mặc định bật |
+| `MARKITDOWN_URL` | Sidecar chuyển PDF/DOCX → text | Trong Docker: `http://markitdown:8080` |
+| `HEADROOM_BASE_URL` | Proxy nén prompt text (Alibaba/OpenAI) | `http://headroom:8787`; tắt: `HEADROOM_ENABLED=false` |
+| `ALIBABA_MAX_OUTPUT_TOKENS` | Cap output Qwen | Mặc định `8192` |
+| `DEEPSEEK_MAX_OUTPUT_TOKENS` | Cap output DeepSeek | Mặc định `8192` |
+
+**Resume import sau FAILED:** `POST /api/admin/import-jobs/:jobId/resume` — chỉ chạy lại các pipeline step chưa `done` (checkpoint trong `IngestionDraft.pipelineState`).
 | `JWT_SECRET` / `JWT_REFRESH_SECRET` | Ký token | Đổi trên production |
 | `AWS_*` / `S3_BUCKET_NAME` | Upload file lên S3 | Admin feature |
 

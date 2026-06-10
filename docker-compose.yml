@@ -1,4 +1,36 @@
 services:
+  headroom:
+    image: ghcr.io/chopratejas/headroom:latest
+    expose:
+      - "8787"
+    restart: unless-stopped
+
+  pymupdf:
+    build:
+      context: ./pymupdf-sidecar
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  markitdown:
+    build:
+      context: ./markitdown-sidecar
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   api:
     build:
       context: .
@@ -14,7 +46,38 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       - GEMINI_MODEL_FALLBACKS=${GEMINI_MODEL_FALLBACKS:-gemini-2.0-flash,gemini-2.0-flash-lite}
-      - GEMINI_MAX_OUTPUT_TOKENS=${GEMINI_MAX_OUTPUT_TOKENS:-65536}
+      - AI_PROVIDER=${AI_PROVIDER:-auto}
+      - AI_PROVIDER_ORDER=${AI_PROVIDER_ORDER:-gemini,openai,alibaba}
+      - AI_ENABLE_STREAMING=${AI_ENABLE_STREAMING:-true}
+      - ALIBABA_API_KEY=${ALIBABA_API_KEY}
+      - ALIBABA_BASE_URL=${ALIBABA_BASE_URL:-https://ws-kdrebhkxfd4i6qvo.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1}
+      - ALIBABA_MODEL=${ALIBABA_MODEL:-qwen-plus}
+      - ALIBABA_VISION_MODEL=${ALIBABA_VISION_MODEL:-qwen-vl-plus}
+      - ALIBABA_MODEL_FALLBACKS=${ALIBABA_MODEL_FALLBACKS:-qwen-turbo,qwen-max}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_MODEL_FALLBACKS=${OPENAI_MODEL_FALLBACKS:-gpt-4o,gpt-4.1}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - DEEPSEEK_MODEL_FALLBACKS=${DEEPSEEK_MODEL_FALLBACKS:-deepseek-v4-pro}
+      - DEEPSEEK_MAX_OUTPUT_TOKENS=${DEEPSEEK_MAX_OUTPUT_TOKENS:-8192}
+      - PYMUPDF_URL=${PYMUPDF_URL:-http://pymupdf:8081}
+      - PYMUPDF_TIMEOUT_MS=${PYMUPDF_TIMEOUT_MS:-120000}
+      - USE_PYMUPDF_PIPELINE=${USE_PYMUPDF_PIPELINE:-true}
+      - MARKITDOWN_URL=${MARKITDOWN_URL:-http://markitdown:8080}
+      - MARKITDOWN_TIMEOUT_MS=${MARKITDOWN_TIMEOUT_MS:-120000}
+      - HEADROOM_ENABLED=${HEADROOM_ENABLED:-true}
+      - HEADROOM_BASE_URL=${HEADROOM_BASE_URL:-http://headroom:8787}
+      - HEADROOM_MIN_CHARS=${HEADROOM_MIN_CHARS:-2000}
+      - HEADROOM_TIMEOUT_MS=${HEADROOM_TIMEOUT_MS:-60000}
+      - HEADROOM_TOKEN_BUDGET=${HEADROOM_TOKEN_BUDGET:-}
+      - HEADROOM_API_KEY=${HEADROOM_API_KEY:-}
+      - ALIBABA_MAX_OUTPUT_TOKENS=${ALIBABA_MAX_OUTPUT_TOKENS:-8192}
+      - OPENAI_MAX_OUTPUT_TOKENS=${OPENAI_MAX_OUTPUT_TOKENS:-16384}
+      - GEMINI_MAX_OUTPUT_TOKENS=${GEMINI_MAX_OUTPUT_TOKENS:-16384}
+      - GEMINI_NORMALIZE_MAX_CONTINUATIONS=${GEMINI_NORMALIZE_MAX_CONTINUATIONS:-10}
+      - NORMALIZE_MAX_PROMPT_CHARS=${NORMALIZE_MAX_PROMPT_CHARS:-28000}
       - DATABASE_URL=postgresql://nguyentrongbao:123456@db:5432/learn_now_db
       - REDIS_URL=redis://redis:6379
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
@@ -30,11 +93,17 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      markitdown:
+        condition: service_healthy
+      pymupdf:
+        condition: service_healthy
+      headroom:
+        condition: service_started
 
   db:
     image: postgres:15-alpine
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U nguyentrongbao -d learn_now_db"]
       interval: 5s
       timeout: 5s
       retries: 5

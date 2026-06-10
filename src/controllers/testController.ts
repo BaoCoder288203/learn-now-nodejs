@@ -68,19 +68,47 @@ export async function getTestDetails(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
-    const partsWithSignedAudio = await Promise.all(
+    const partsWithSignedAssets = await Promise.all(
       test.parts.map(async (part) => {
-        if (part.audioUrl && isS3Key(part.audioUrl)) {
-          return {
-            ...part,
-            audioUrl: await getPresignedGetUrl(part.audioUrl, 7200),
-          };
-        }
-        return part;
+        const audioUrl =
+          part.audioUrl && isS3Key(part.audioUrl)
+            ? await getPresignedGetUrl(part.audioUrl, 7200)
+            : part.audioUrl;
+
+        const questionGroups = await Promise.all(
+          (part.questionGroups || []).map(async (group) => ({
+            ...group,
+            imageUrl:
+              group.imageUrl && isS3Key(group.imageUrl)
+                ? await getPresignedGetUrl(group.imageUrl, 7200)
+                : group.imageUrl,
+            questions: await Promise.all(
+              group.questions.map(async (question) => ({
+                ...question,
+                image:
+                  question.image && isS3Key(question.image)
+                    ? await getPresignedGetUrl(question.image, 7200)
+                    : question.image,
+              }))
+            ),
+          }))
+        );
+
+        const questions = await Promise.all(
+          (part.questions || []).map(async (question) => ({
+            ...question,
+            image:
+              question.image && isS3Key(question.image)
+                ? await getPresignedGetUrl(question.image, 7200)
+                : question.image,
+          }))
+        );
+
+        return { ...part, audioUrl, questionGroups, questions };
       })
     );
 
-    res.json({ ...test, parts: partsWithSignedAudio });
+    res.json({ ...test, parts: partsWithSignedAssets });
   } catch (error) {
     console.error("Get test details error:", error);
     res.status(500).json({ error: "Failed to load test structure." });

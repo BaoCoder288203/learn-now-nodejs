@@ -88,6 +88,7 @@ model QuestionGroup {
   transcript String?  @db.Text
   audioUrl   String?
   imageUrl   String?
+  textRegions Json?
   groupOrder Int      @default(0)
   questions  Question[]
 }
@@ -108,6 +109,36 @@ model Question {
   options         Option[]
   answers         Answer[]
   selectedWords   SelectedWord[]
+  analysis        QuestionAnalysis?
+  vocabularyItems QuestionVocabulary[]
+}
+
+model QuestionAnalysis {
+  id          String    @id @default(uuid())
+  questionId  String    @unique
+  question    Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  explanation String?   @db.Text
+  grammar     String?   @db.Text
+  translation String?   @db.Text
+  difficulty  String?
+  status      String    @default("pending")
+  generatedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model QuestionVocabulary {
+  id         String   @id @default(uuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  word       String
+  meaning    String?
+  ipa        String?
+  example    String?  @db.Text
+  level      String?
+  createdAt  DateTime @default(now())
+
+  @@unique([questionId, word])
 }
 
 model Option {
@@ -179,6 +210,7 @@ model IngestionJob {
   confidence     Float?
   reviewRequired Boolean         @default(false)
   errorMessage   String?         @db.Text
+  lastFailedStep String?
   resultSummary  String?         @db.Text
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
@@ -209,6 +241,7 @@ model IngestionDraft {
   canonicalJson      Json
   classificationJson Json?
   parsedToeicJson    Json?
+  pipelineState      Json?
   reviewPayload      Json?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt

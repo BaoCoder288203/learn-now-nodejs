@@ -5,15 +5,14 @@ Express + Prisma (SQLite) API for the TOEIC practice frontend.
 ## Prerequisites
 
 - Node.js 20+
-- `GEMINI_API_KEY` (required for admin AI import)
+- `ALIBABA_API_KEY` (Alibaba Model Studio / Qwen) and/or `OPENAI_API_KEY` / `GEMINI_API_KEY` for admin AI import
 - AWS S3 bucket + IAM credentials (required for admin file upload)
 
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env
-# Edit .env — set GEMINI_API_KEY if using admin import
+# Chỉnh learn-now-nodejs/.env — set ALIBABA_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY cho admin import
 
 npx prisma db push
 npm run dev
@@ -43,7 +42,20 @@ API runs at **http://localhost:4000** (default).
 |------------------------|--------------------------------------|
 | `PORT`                 | API port (default `4000`)            |
 | `CORS_ORIGIN`          | Comma-separated frontend URLs        |
-| `GEMINI_API_KEY`       | Google Gemini for OCR import         |
+| `AI_PROVIDER`          | `auto` (default), `alibaba`, `deepseek`, `openai`, or `gemini` |
+| `AI_PROVIDER_ORDER`    | Comma-separated fallback order; default `alibaba,deepseek,openai,gemini` |
+| `DEEPSEEK_API_KEY`     | [DeepSeek API](https://api-docs.deepseek.com/) (OpenAI-compatible) |
+| `DEEPSEEK_BASE_URL`    | Default `https://api.deepseek.com` |
+| `DEEPSEEK_MODEL`       | Default `deepseek-v4-flash`; fallback `deepseek-v4-pro` via `DEEPSEEK_MODEL_FALLBACKS` |
+| `DEEPSEEK_MAX_OUTPUT_TOKENS` | Default `8192` |
+| `ALIBABA_API_KEY`      | Alibaba Cloud Model Studio (Qwen), OpenAI-compatible endpoint |
+| `ALIBABA_BASE_URL`     | Workspace compatible-mode URL (from Model Studio console) |
+| `ALIBABA_MODEL`        | Default `qwen-plus`; vision: `ALIBABA_VISION_MODEL` (`qwen-vl-plus`) |
+| `OPENAI_API_KEY`       | OpenAI for TOEIC import (fallback in `auto`) |
+| `OPENAI_MODEL`         | Optional; default `gpt-4o-mini`      |
+| `OPENAI_MODEL_FALLBACKS` | Comma-separated; default `gpt-4o,gpt-4.1` |
+| `OPENAI_MAX_OUTPUT_TOKENS` | Optional; default `65536`        |
+| `GEMINI_API_KEY`       | Google Gemini (fallback in `auto`)   |
 | `JWT_SECRET`           | Access token signing                 |
 | `JWT_REFRESH_SECRET`   | Refresh token signing                |
 | `AWS_ACCESS_KEY_ID`    | IAM access key for S3                |
@@ -54,8 +66,52 @@ API runs at **http://localhost:4000** (default).
 | `GEMINI_MODEL_FALLBACKS` | Comma-separated fallback models when quota/503; default `gemini-2.0-flash,gemini-2.0-flash-lite` |
 | `GEMINI_MAX_OUTPUT_TOKENS` | Optional; default `65536`        |
 | `AUTO_IMPORT_THRESHOLD`| Optional; min confidence (0–1) to skip admin review; default `0.85` |
+| `MARKITDOWN_URL`         | MarkItDown sidecar URL (`http://markitdown:8080` in Docker Compose; `http://localhost:8080` if API chạy ngoài Docker). Để trống = chỉ dùng pdf-parse |
+| `MARKITDOWN_TIMEOUT_MS`  | Optional; timeout gọi sidecar (default `120000`) |
+| `AI_ENABLE_STREAMING`    | `true` (default) — stream JSON; on truncate, handoff partial sang provider kế |
+| `HEADROOM_BASE_URL`      | Headroom proxy (`http://headroom:8787` trong Compose; `http://127.0.0.1:8787` nếu API dev + proxy Docker). Để trống hoặc `HEADROOM_ENABLED=false` = tắt nén |
+| `HEADROOM_MIN_CHARS`     | Chỉ nén prompt text ≥ N ký tự (default `2000`). Vision (KEY RC ảnh) không nén |
+| `ALIBABA_MAX_OUTPUT_TOKENS` | Default `8192` (tránh lỗi Qwen max_tokens) |
+| `OPENAI_MAX_OUTPUT_TOKENS`  | Default `16384` |
+| `GEMINI_MAX_OUTPUT_TOKENS`  | Default `8192` |
 
-### S3 object key layout
+### Import pipeline checkpoint + resume
+
+TOEIC import lưu tiến độ từng bước trong `IngestionDraft.pipelineState` (extract → RC key → Listening 1–4 → Reading 5–7 → save). Khi job `FAILED`, gọi lại chỉ các bước chưa `done` — không parse lại Part đã xong.
+
+```bash
+# Tiếp tục job sau khi hết quota AI
+POST /api/admin/import-jobs/:jobId/resume
+```
+
+Log: `[Pipeline] step=parse_listening_2 status=skip` (đã checkpoint) hoặc `status=run`.
+
+### Docker Compose (API + Postgres + Redis + MarkItDown + Headroom)
+
+```bash
+docker compose up -d --build
+```
+
+| Service | Port | Mô tả |
+|---------|------|--------|
+| `api` | 4000 | Node.js API |
+| `markitdown` | 8080 | Python sidecar — `POST /convert`, `GET /health` |
+| `headroom` | 8787 | Context compression proxy — nén prompt text trước Alibaba/OpenAI |
+| `db` | 5432 | PostgreSQL |
+| `redis` | 6379 | Redis |
+
+Chỉ chạy sidecar (dev local, API bằng `npm run dev`):
+
+```bash
+docker compose up -d markitdown headroom
+# .env: MARKITDOWN_URL=http://localhost:8080
+# .env: HEADROOM_BASE_URL=http://127.0.0.1:8787
+```
+
+Hoặc proxy Headroom riêng: `docker run -d --name headroom -p 8787:8787 ghcr.io/chopratejas/headroom:latest`
+
+Tắt MarkItDown (chỉ pdf-parse): trong `.env` set `MARKITDOWN_URL=` (rỗng) và bỏ `depends_on` markitdown hoặc không start service `markitdown`.
+
 
 Upload paths are derived from `Test.examType` (`TOEIC` → `toeic`, `IELTS` → `ielts`):
 
