@@ -28,7 +28,12 @@ import {
   createImportJob,
   getImportJob,
   submitImportReview,
+  resumeImportJobHandler,
 } from "../controllers/adminController.js";
+import {
+  enqueueTestContentGeneration,
+  getQuestionAnalysis,
+} from "../controllers/questionController.js";
 import { authenticateJWT, requireAdmin } from "../middlewares/authMiddleware.js";
 
 const router = Router();
@@ -82,6 +87,7 @@ router.post("/tests/finish", authenticateJWT, finishTestAttempt);
 router.get("/tests/attempts/:attemptId", authenticateJWT, getAttemptResult);
 router.get("/tests/attempts/:attemptId/words", authenticateJWT, getSelectedWordsByAttempt);
 router.get("/attempts", authenticateJWT, getUserAttempts);
+router.get("/questions/:id/analysis", authenticateJWT, getQuestionAnalysis);
 
 // -------------------------------------------------------------
 // USER - STUDY NOTEBOOK VOCABULARY PATHS (JWT PROTECTED)
@@ -119,6 +125,18 @@ router.post(
   authenticateJWT,
   requireAdmin,
   submitImportReview
+);
+router.post(
+  "/admin/import-jobs/:jobId/resume",
+  authenticateJWT,
+  requireAdmin,
+  resumeImportJobHandler
+);
+router.post(
+  "/admin/tests/:testId/generate-content",
+  authenticateJWT,
+  requireAdmin,
+  enqueueTestContentGeneration
 );
 
 export default router;

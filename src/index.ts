@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import apiRouter from "./routes/api.js";
+import { logProviderOrderAtStartup } from "./services/ai/dualProvider.js";
 import { seedDatabaseIfEmpty } from "./seed.js";
 
 function parseCorsOrigins(): string | string[] {
@@ -35,6 +36,8 @@ async function startApiServer(): Promise<void> {
   app.use("/api", apiRouter);
 
   await seedDatabaseIfEmpty();
+
+  logProviderOrderAtStartup();
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`TOEIC API running on http://localhost:${PORT}`);

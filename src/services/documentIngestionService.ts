@@ -1,11 +1,25 @@
 import { IngestionStatus, type IngestionFileRole } from "@prisma/client";
 import { prisma } from "../db.js";
 import { buildCanonicalPayload, type CanonicalFileRole } from "./canonicalDocService.js";
-import { parseDocumentWithMineru } from "./mineruService.js";
-import { extractTextFromPdfBuffer } from "./pdfService.js";
-import { processToeicExam, type UploadedFileRef } from "./examProcessingService.js";
+import { extractDocumentText } from "./documentExtractService.js";
+import {
+  processToeicExamResumable,
+  type UploadedFileRef,
+} from "./examProcessingService.js";
+import { syncUploadedFilesFromRefs } from "./uploadedFileSyncService.js";
 import type { ExamFileType } from "./s3ObjectKey.js";
-import { classifyToeicFileRoles } from "./geminiService.js";
+import {
+  findLastFailedStep,
+  parsePipelineState,
+  setStepDone,
+} from "./importPipelineState.js";
+import {
+  ensurePipelineState,
+  loadPipelineStateForJob,
+  markJobFailed,
+  savePipelineState,
+} from "./importPipelinePersistence.js";
+import { classifyToeicFileRoles } from "./toeicAiService.js";
 
 export interface UploadedBatchFile {
   originalName: string;
@@ -27,15 +41,7 @@ function isDocumentLike(mimeType: string): boolean {
 
 async function extractTextForFile(file: UploadedBatchFile): Promise<string> {
   if (isDocumentLike(file.mimeType)) {
-    try {
-      const parsed = await parseDocumentWithMineru(file.buffer, file.originalName, file.mimeType);
-      return parsed.text;
-    } catch (error) {
-      if (file.mimeType === "application/pdf") {
-        return extractTextFromPdfBuffer(file.buffer);
-      }
-      throw error;
-    }
+    return extractDocumentText(file.buffer, file.mimeType, file.originalName);
   }
   return "";
 }
@@ -113,13 +119,19 @@ export async function runDocumentIngestionJob(
     Number(process.env.AUTO_IMPORT_THRESHOLD || 0.9)
   );
 
+  const pipelineState = await ensurePipelineState(jobId, testId, "import_job");
+
   const aiPredictions = await classifyToeicFileRoles(
     parsedFiles.map((f) => ({
       fileName: f.name,
       mimeType: f.mimeType,
       textSample: f.text.slice(0, 4000),
-    }))
+    })),
+    pipelineState.steps.classify
   ).catch(() => []);
+
+  setStepDone(pipelineState, "classify", aiPredictions);
+  await savePipelineState(jobId, pipelineState, "Classify done");
 
   for (const file of canonical.files) {
     const ai = aiPredictions.find((p) => p.fileName === file.name);
@@ -229,29 +241,85 @@ export async function importAfterReview(jobId: string, testId: string): Promise<
 
   await prisma.ingestionJob.update({
     where: { id: jobId },
-    data: { status: IngestionStatus.IMPORTING, progressStep: "Importing TOEIC structure" },
+    data: {
+      status: IngestionStatus.IMPORTING,
+      progressStep: "Importing TOEIC structure",
+      errorMessage: null,
+      lastFailedStep: null,
+    },
   });
+
+  const existingState = parsePipelineState(ingestion.draft?.pipelineState);
+  const pipelineState =
+    existingState && existingState.testId === testId
+      ? existingState
+      : await ensurePipelineState(jobId, testId, "import_job");
+
+  const fileNames: Partial<Record<ExamFileType, string>> = {};
+  for (const f of ingestion.files) {
+    const examType = roleToExamFileType(prismaRoleToCanonical(f.detectedRole));
+    if (examType) {
+      fileNames[examType] = f.originalName;
+    }
+  }
+  await syncUploadedFilesFromRefs(testId, refs, fileNames);
 
   const progressLog: Array<{ step: string; detail: string }> = [];
-  const result = await processToeicExam(testId, refs, (p) => progressLog.push(p));
 
-  await prisma.ingestionDraft.upsert({
-    where: { ingestionJobId: jobId },
-    create: {
-      ingestionJobId: jobId,
-      canonicalJson: {},
-      parsedToeicJson: { progressLog, result } as unknown as object,
-    },
-    update: { parsedToeicJson: { progressLog, result } as unknown as object },
-  });
+  try {
+    const result = await processToeicExamResumable(testId, refs, (p) => progressLog.push(p), {
+      jobId,
+      pipelineState,
+      source: "import_job",
+    });
 
-  await prisma.ingestionJob.update({
+    await prisma.ingestionDraft.upsert({
+      where: { ingestionJobId: jobId },
+      create: {
+        ingestionJobId: jobId,
+        canonicalJson: ingestion.draft?.canonicalJson ?? {},
+        pipelineState: pipelineState as object,
+        parsedToeicJson: { progressLog, result } as unknown as object,
+      },
+      update: {
+        pipelineState: pipelineState as object,
+        parsedToeicJson: { progressLog, result } as unknown as object,
+      },
+    });
+
+    await prisma.ingestionJob.update({
+      where: { id: jobId },
+      data: {
+        status: IngestionStatus.DONE,
+        reviewRequired: false,
+        progressStep: "Done",
+        lastFailedStep: null,
+        errorMessage: null,
+        resultSummary: JSON.stringify(result),
+      },
+    });
+  } catch (error) {
+    const failedStep = findLastFailedStep(pipelineState) ?? "save_db";
+    await markJobFailed(jobId, failedStep, error, pipelineState);
+    throw error;
+  }
+}
+
+export async function resumeImportJob(jobId: string): Promise<void> {
+  const job = await prisma.ingestionJob.findUnique({
     where: { id: jobId },
-    data: {
-      status: IngestionStatus.DONE,
-      reviewRequired: false,
-      progressStep: "Done",
-      resultSummary: JSON.stringify(result),
-    },
+    select: { id: true, testId: true, status: true },
   });
+
+  if (!job) {
+    throw new Error("Không tìm thấy import job.");
+  }
+
+  if (job.status !== IngestionStatus.FAILED && job.status !== IngestionStatus.IMPORTING) {
+    throw new Error(
+      `Chỉ resume job ở trạng thái FAILED hoặc IMPORTING (hiện tại: ${job.status}).`
+    );
+  }
+
+  await importAfterReview(jobId, job.testId);
 }

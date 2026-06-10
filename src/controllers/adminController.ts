@@ -2,18 +2,30 @@ import { Response } from "express";
 import path from "path";
 import { prisma } from "../db.js";
 import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
-import { parseToeicContent } from "../services/geminiService.js";
+import { parseToeicContent } from "../services/toeicAiService.js";
 import {
-  processToeicExam,
+  processToeicExamResumable,
   type UploadedFileRef,
 } from "../services/examProcessingService.js";
+import {
+  findLastFailedStep,
+  parsePipelineState,
+  pipelineStepsSummary,
+} from "../services/importPipelineState.js";
+import {
+  ensurePipelineState,
+  loadPipelineStateForJob,
+  markJobFailed,
+} from "../services/importPipelinePersistence.js";
 import { buildIntakeObjectKey, buildObjectKey, type ExamFileType } from "../services/s3ObjectKey.js";
 import { uploadObject } from "../services/s3Service.js";
 import {
   importAfterReview,
+  resumeImportJob,
   runDocumentIngestionJob,
   type UploadedBatchFile,
 } from "../services/documentIngestionService.js";
+import { IngestionStatus } from "@prisma/client";
 
 // Toggle test publish status
 export async function togglePublishTest(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -226,6 +238,12 @@ export async function importToeicExamViaAi(req: AuthenticatedRequest, res: Respo
 
 export async function uploadAndProcessExam(req: AuthenticatedRequest, res: Response): Promise<void> {
   const { testId } = req.params;
+  const userId = req.user?.id;
+
+  if (!userId) {
+    res.status(401).json({ error: "Không xác định được người dùng." });
+    return;
+  }
 
   try {
     const test = await prisma.test.findUnique({ where: { id: testId } });
@@ -289,16 +307,48 @@ export async function uploadAndProcessExam(req: AuthenticatedRequest, res: Respo
 
     const progressLog: { step: string; detail: string }[] = [];
 
-    const result = await processToeicExam(testId, fileRefs, (p) => {
-      progressLog.push(p);
+    const importJob = await prisma.ingestionJob.create({
+      data: {
+        testId,
+        createdById: userId,
+        status: IngestionStatus.IMPORTING,
+        progressStep: "Direct upload import",
+      },
     });
 
-    res.json({
-      message: `Import thành công! Tổng cộng ${result.totalQuestions} câu hỏi.`,
-      totalQuestions: result.totalQuestions,
-      partsSummary: result.partsSummary,
-      progressLog,
-    });
+    const pipelineState = await ensurePipelineState(importJob.id, testId, "direct_import");
+
+    try {
+      const result = await processToeicExamResumable(testId, fileRefs, (p) => {
+        progressLog.push(p);
+      }, {
+        jobId: importJob.id,
+        pipelineState,
+        source: "direct_import",
+      });
+
+      await prisma.ingestionJob.update({
+        where: { id: importJob.id },
+        data: {
+          status: IngestionStatus.DONE,
+          progressStep: "Done",
+          resultSummary: JSON.stringify(result),
+        },
+      });
+
+      res.json({
+        message: `Import thành công! Tổng cộng ${result.totalQuestions} câu hỏi.`,
+        jobId: importJob.id,
+        totalQuestions: result.totalQuestions,
+        partsSummary: result.partsSummary,
+        progressLog,
+        pipelineSteps: pipelineStepsSummary(pipelineState),
+      });
+    } catch (importError) {
+      const failedStep = findLastFailedStep(pipelineState) ?? "save_db";
+      await markJobFailed(importJob.id, failedStep, importError, pipelineState);
+      throw importError;
+    }
   } catch (error) {
     console.error("Upload and process exam error:", error);
     res.status(500).json({
@@ -308,7 +358,7 @@ export async function uploadAndProcessExam(req: AuthenticatedRequest, res: Respo
 }
 
 // ---------------------------------------------------------------------------
-// New: Single multi-file ingestion job (MinerU + review gate)
+// New: Single multi-file ingestion job (extract + review gate)
 // ---------------------------------------------------------------------------
 export async function createImportJob(req: AuthenticatedRequest, res: Response): Promise<void> {
   const { testId } = req.params;
@@ -384,14 +434,20 @@ export async function createImportJob(req: AuthenticatedRequest, res: Response):
 
     void runDocumentIngestionJob(job.id, testId, uploadBatchFiles).catch(async (error) => {
       console.error("Background ingestion job error:", error);
-      await prisma.ingestionJob.update({
-        where: { id: job.id },
-        data: {
-          status: "FAILED",
-          errorMessage: error instanceof Error ? error.message : String(error),
-          progressStep: "Failed",
-        },
-      });
+      const state = await loadPipelineStateForJob(job.id);
+      if (state) {
+        const failedStep = findLastFailedStep(state) ?? "classify";
+        await markJobFailed(job.id, failedStep, error, state);
+      } else {
+        await prisma.ingestionJob.update({
+          where: { id: job.id },
+          data: {
+            status: "FAILED",
+            errorMessage: error instanceof Error ? error.message : String(error),
+            progressStep: "Failed",
+          },
+        });
+      }
     });
 
     res.status(201).json({
@@ -418,7 +474,11 @@ export async function getImportJob(req: AuthenticatedRequest, res: Response): Pr
       res.status(404).json({ error: "Không tìm thấy import job." });
       return;
     }
-    res.json(job);
+    const pipelineState = parsePipelineState(job.draft?.pipelineState);
+    res.json({
+      ...job,
+      pipelineSteps: pipelineState ? pipelineStepsSummary(pipelineState) : null,
+    });
   } catch (error) {
     console.error("Get import job error:", error);
     res.status(500).json({ error: "Không thể tải trạng thái import job." });
@@ -462,14 +522,6 @@ export async function submitImportReview(req: AuthenticatedRequest, res: Respons
 
     void importAfterReview(jobId, job.testId).catch(async (error) => {
       console.error("Import after review error:", error);
-      await prisma.ingestionJob.update({
-        where: { id: jobId },
-        data: {
-          status: "FAILED",
-          errorMessage: error instanceof Error ? error.message : String(error),
-          progressStep: "Failed",
-        },
-      });
     });
 
     const updated = await prisma.ingestionJob.findUnique({
@@ -481,6 +533,37 @@ export async function submitImportReview(req: AuthenticatedRequest, res: Respons
     console.error("Submit import review error:", error);
     res.status(500).json({
       error: `Xác nhận review thất bại: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+}
+
+export async function resumeImportJobHandler(
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> {
+  const { jobId } = req.params;
+
+  try {
+    void resumeImportJob(jobId).catch((error) => {
+      console.error("Resume import job error:", error);
+    });
+
+    const job = await prisma.ingestionJob.findUnique({
+      where: { id: jobId },
+      select: { id: true, status: true, progressStep: true, lastFailedStep: true },
+    });
+
+    res.json({
+      jobId,
+      status: job?.status ?? IngestionStatus.IMPORTING,
+      progressStep: job?.progressStep ?? "Resuming import",
+      lastFailedStep: job?.lastFailedStep,
+      message: "Đang tiếp tục import từ checkpoint đã lưu.",
+    });
+  } catch (error) {
+    console.error("Resume import job handler error:", error);
+    res.status(400).json({
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 }
