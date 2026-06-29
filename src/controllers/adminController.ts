@@ -45,6 +45,26 @@ export async function togglePublishTest(req: AuthenticatedRequest, res: Response
   }
 }
 
+// Delete a test and its related database records
+export async function deleteTest(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const { testId } = req.params;
+
+  try {
+    const test = await prisma.test.findUnique({ where: { id: testId } });
+    if (!test) {
+      res.status(404).json({ error: "Không tìm thấy đề thi." });
+      return;
+    }
+
+    await prisma.test.delete({ where: { id: testId } });
+
+    res.json({ message: "Đã xóa đề thi thành công." });
+  } catch (error) {
+    console.error("Delete test error:", error);
+    res.status(500).json({ error: "Không thể xóa đề thi." });
+  }
+}
+
 // Edit query question directly
 export async function editQuestion(req: AuthenticatedRequest, res: Response): Promise<void> {
   const { questionId } = req.params;

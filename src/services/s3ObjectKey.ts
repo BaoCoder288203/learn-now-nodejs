@@ -66,6 +66,17 @@ export function buildPassageGroupImageKey(
   return `passages/${exam}/${testId}/part-${partNumber}/group-${groupOrder}.png`;
 }
 
+/** Full reading page rendered from exam PDF (Part 5–7). */
+export function buildReadingPageImageKey(
+  examType: string,
+  testId: string,
+  partNumber: number,
+  sourcePage: number
+): string {
+  const exam = examSlug(examType);
+  return `passages/${exam}/${testId}/part-${partNumber}/page-${sourcePage}.png`;
+}
+
 /** Part 1 photograph per question. */
 export function buildPart1QuestionImageKey(
   examType: string,

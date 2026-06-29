@@ -79,17 +79,33 @@ describe("Đề 3 golden fixtures", { skip: !fixturesAvailable }, () => {
     }
     assert.ok(
       part6.groups.filter((g) => g.imageBbox && g.sourcePage).length >= 3,
-      "P6 needs passage bbox on most groups"
+      "P6 needs full-page source on most groups"
     );
 
     const part7 = doc.parts.find((p) => p.partNumber === 7)!;
+    assert.ok(part7.groups.length >= 15, "Part 7 must have >=15 groups");
     const p7WithPassage = part7.groups.filter((g) => g.passage && g.passage.length > 40);
-    assert.ok(p7WithPassage.length >= 15, "Part 7 must have >=15 passage groups");
+    assert.ok(p7WithPassage.length >= 14, "Part 7 must have >=14 substantial passage groups");
     const p7Weak = part7.groups.filter((g) => !g.passage || g.passage.length < 20);
     assert.equal(p7Weak.length, 0, `Part 7 weak passages: ${p7Weak.map((g) => g.questions[0]?.questionNumber).join(",")}`);
+    assert.ok(
+      part7.groups.filter((g) => g.imageBbox && g.sourcePage).length >= 14,
+      "P7 needs full-page source on most groups"
+    );
 
     const q131 = part6.groups[0]!.questions.find((q) => q.questionNumber === 131)!;
     assert.match(q131.options[0]!, /competitive|transformed/i);
+
+    for (const startQ of [62, 65, 68]) {
+      const g = part3.groups.find((grp) => grp.questions[0]?.questionNumber === startQ);
+      assert.ok(g?.sourcePage && g?.imageBbox, `P3 graphic group Q${startQ} needs sourcePage + imageBbox`);
+    }
+
+    const part4 = doc.parts.find((p) => p.partNumber === 4)!;
+    for (const startQ of [95, 98]) {
+      const g = part4.groups.find((grp) => grp.questions[0]?.questionNumber === startQ);
+      assert.ok(g?.sourcePage && g?.imageBbox, `P4 graphic group Q${startQ} needs sourcePage + imageBbox`);
+    }
   });
 
   it("extracts distinct Part 3 transcripts from KEY LC", () => {

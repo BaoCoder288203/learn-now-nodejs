@@ -3,6 +3,7 @@ import { uploadObject } from "./s3Service.js";
 import {
   buildPart1QuestionImageKey,
   buildPassageGroupImageKey,
+  buildReadingPageImageKey,
 } from "./s3ObjectKey.js";
 
 const DEFAULT_SCALE = 2;
@@ -52,6 +53,18 @@ export async function uploadPart1QuestionImage(
   pngBuffer: Buffer
 ): Promise<string> {
   const key = buildPart1QuestionImageKey(examType, testId, questionNumber);
+  await uploadObject(key, pngBuffer, "image/png");
+  return key;
+}
+
+export async function uploadReadingPageImage(
+  examType: string,
+  testId: string,
+  partNumber: number,
+  sourcePage: number,
+  pngBuffer: Buffer
+): Promise<string> {
+  const key = buildReadingPageImageKey(examType, testId, partNumber, sourcePage);
   await uploadObject(key, pngBuffer, "image/png");
   return key;
 }

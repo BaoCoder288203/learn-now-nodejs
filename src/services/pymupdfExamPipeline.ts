@@ -25,6 +25,7 @@ import {
   pymupdfExtractLayout,
   pymupdfExtractText,
   pymupdfClipPage,
+  pymupdfRenderPage,
   spansToTextRegions,
   usePyMuPdfPipeline,
   type PyMuPdfDocumentLayout,
@@ -38,6 +39,8 @@ import {
   parseReadingPart7Chunk,
   parseListeningParts,
   attachPart1Images,
+  attachListeningGroupVisuals,
+  repairListeningQuestionsFromLayout,
   sliceRawPartByQuestionRange,
   type RawToeicDocument,
   type RawToeicPart,
@@ -54,11 +57,13 @@ import {
   type ProcessToeicExamContext,
   type UploadedFileRef,
 } from "./examProcessingService.js";
-import { uploadPart1QuestionImage, uploadPassageGroupImage } from "./pdfImageService.js";
+import { uploadPart1QuestionImage, uploadPassageGroupImage, uploadReadingPageImage } from "./pdfImageService.js";
 import type { NormalizedBbox, TextRegion } from "./ai/types.js";
 import { clampBbox } from "./imageCropBbox.js";
 import { filterRegionsInsideBbox, remapRegionsToCrop } from "./imageCropBbox.js";
 import { findPassageBboxOnPage, findPageForPassageHeader } from "./toeicRuleParser/layoutBbox.js";
+import { isFullPageBbox } from "./toeicRuleParser/columnLayout.js";
+import { summarizeReadingParse } from "./toeicRuleParser/readingParseSummary.js";
 
 interface ReadingParseProgress {
   part5?: RawToeicPart;
@@ -81,7 +86,7 @@ async function normalizeRawPart(
   return runPipelineStep(
     pipelineState,
     normStepId,
-    () => {
+    async () => {
       log?.("gemini_normalize", `Part ${raw.partNumber}: rule-parsed structure (skip AI reshape).`);
       return convertRawPartToParsed(raw);
     },
@@ -151,12 +156,64 @@ async function prepareAssetsPyMuPdf(
   examPdfBuffer: Buffer,
   examLayout: PyMuPdfDocumentLayout,
   parts: ParsedPart[]
-): Promise<Map<string, { imageUrl?: string; textRegions?: TextRegion[]; questionImages: Map<number, string> }>> {
-  const assets = new Map<string, { imageUrl?: string; textRegions?: TextRegion[]; questionImages: Map<number, string> }>();
+): Promise<
+  Map<
+    string,
+    {
+      imageUrl?: string;
+      textRegions?: TextRegion[];
+      images?: { imageUrl: string; textRegions?: TextRegion[]; sourcePage?: number }[];
+      questionImages: Map<number, string>;
+    }
+  >
+> {
+  const assets = new Map<
+    string,
+    {
+      imageUrl?: string;
+      textRegions?: TextRegion[];
+      images?: { imageUrl: string; textRegions?: TextRegion[]; sourcePage?: number }[];
+      questionImages: Map<number, string>;
+    }
+  >();
   const pageLayoutCache = new Map<number, PyMuPdfDocumentLayout["pages"][0]>();
+  const pageAssetCache = new Map<number, { imageUrl: string; textRegions?: TextRegion[] }>();
 
   for (const page of examLayout.pages) {
     pageLayoutCache.set(page.pageNumber, page);
+  }
+
+  async function getOrCreateFullPageAsset(
+    sourcePage: number,
+    partNumber: number
+  ): Promise<{ imageUrl: string; textRegions?: TextRegion[] } | null> {
+    const cached = pageAssetCache.get(sourcePage);
+    if (cached) return cached;
+
+    try {
+      const rendered = await pymupdfRenderPage(examPdfBuffer, sourcePage);
+      const page = pageLayoutCache.get(sourcePage);
+      const textRegions = page ? spansToTextRegions(page.spans) : undefined;
+      const imageKey = await uploadReadingPageImage(
+        examType,
+        testId,
+        partNumber,
+        sourcePage,
+        rendered
+      );
+      const entry = {
+        imageUrl: imageKey,
+        textRegions: textRegions?.length ? textRegions : undefined,
+      };
+      pageAssetCache.set(sourcePage, entry);
+      return entry;
+    } catch (error) {
+      console.warn(
+        `[PyMuPDF Pipeline] Full page render failed page ${sourcePage}:`,
+        error instanceof Error ? error.message : error
+      );
+      return null;
+    }
   }
 
   for (const parsedPart of parts) {
@@ -166,11 +223,16 @@ async function prepareAssetsPyMuPdf(
       const entry: {
         imageUrl?: string;
         textRegions?: TextRegion[];
+        images?: { imageUrl: string; textRegions?: TextRegion[]; sourcePage?: number }[];
         questionImages: Map<number, string>;
       } = { questionImages: new Map<number, string>() };
       assets.set(key, entry);
 
-      let sourcePage = group.sourcePage;
+      // Part 5 are standalone single-sentence questions; show parsed question text per
+      // question instead of rendering the whole exam page as an image.
+      if (parsedPart.partNumber === 5) continue;
+
+      let sourcePage = group.sourcePage ?? group.sourcePages?.[0];
       if (!sourcePage && parsedPart.partNumber === 1) {
         const q = group.questions[0]?.questionNumber;
         if (q) {
@@ -182,6 +244,31 @@ async function prepareAssetsPyMuPdf(
 
       const bbox = resolveGroupBbox(parsedPart, group, pageLayoutCache);
       if (!bbox) continue;
+
+      const isReadingFullPage =
+        parsedPart.partNumber >= 5 &&
+        parsedPart.partNumber <= 7 &&
+        isFullPageBbox(bbox);
+
+      if (isReadingFullPage) {
+        const sourcePages =
+          group.sourcePages && group.sourcePages.length > 0
+            ? [...new Set(group.sourcePages)]
+            : [sourcePage];
+        for (const pageNumber of sourcePages) {
+          const pageAsset = await getOrCreateFullPageAsset(pageNumber, parsedPart.partNumber);
+          if (!pageAsset) continue;
+          const asset = {
+            imageUrl: pageAsset.imageUrl,
+            textRegions: pageAsset.textRegions,
+            sourcePage: pageNumber,
+          };
+          entry.images = [...(entry.images ?? []), asset];
+          entry.imageUrl ??= pageAsset.imageUrl;
+          entry.textRegions ??= pageAsset.textRegions;
+        }
+        continue;
+      }
 
       try {
         const cropped = await pymupdfClipPage(examPdfBuffer, sourcePage, bbox);
@@ -208,6 +295,13 @@ async function prepareAssetsPyMuPdf(
         );
         if (parsedPart.partNumber === 6 || parsedPart.partNumber === 7) {
           entry.textRegions = textRegions.length ? textRegions : undefined;
+          entry.images = [
+            {
+              imageUrl: entry.imageUrl,
+              textRegions: entry.textRegions,
+              sourcePage,
+            },
+          ];
         }
       } catch (error) {
         console.warn(
@@ -328,7 +422,37 @@ export async function processToeicExamPyMuPdfResumable(
         listening.find((p) => p.partNumber === 1)!,
         extractResult.examLayout
       );
-      return listening.map((p) => (p.partNumber === 1 ? part1 : p));
+      const withVisuals = listening.map((p) => {
+        if (p.partNumber === 1) return part1;
+        if (p.partNumber === 3 || p.partNumber === 4) {
+          const repaired = repairListeningQuestionsFromLayout(
+            p.groups,
+            extractResult.examLayout,
+            p.partNumber
+          );
+          return {
+            ...p,
+            groups: attachListeningGroupVisuals(
+              repaired,
+              extractResult.examLayout,
+              p.partNumber
+            ),
+          };
+        }
+        return p;
+      });
+
+      for (const partNum of [3, 4] as const) {
+        const part = withVisuals.find((p) => p.partNumber === partNum);
+        if (!part) continue;
+        const withBbox = part.groups.filter((g) => g.sourcePage && g.imageBbox).length;
+        log(
+          "toeic_parse_listening",
+          `Part ${partNum}: ${withBbox}/${part.groups.length} groups with graphic bbox.`
+        );
+      }
+
+      return withVisuals;
     },
     stepOpts
   );
@@ -368,11 +492,17 @@ export async function processToeicExamPyMuPdfResumable(
         log("toeic_parse_reading", `Part 7 chunk ${start}-${end} done.`);
       }
 
-      return [
+      const readingParts = [
         progress.part5!,
         progress.part6!,
         { partNumber: 7 as const, groups: progress.part7Groups },
-      ] satisfies RawToeicPart[];
+      ];
+      for (const line of summarizeReadingParse(readingParts)) {
+        log("toeic_parse_reading", line);
+        console.warn(line);
+      }
+
+      return readingParts satisfies RawToeicPart[];
     },
     stepOpts
   );
@@ -429,6 +559,7 @@ export async function processToeicExamPyMuPdfResumable(
               | Record<string, PreparedGroupAssetsSerializable>
               | undefined
           ),
+          onImportLog: (detail) => log("save_db", detail),
         }
       );
     },

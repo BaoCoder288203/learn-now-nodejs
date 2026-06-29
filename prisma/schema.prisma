@@ -90,7 +90,19 @@ model QuestionGroup {
   imageUrl   String?
   textRegions Json?
   groupOrder Int      @default(0)
+  images     QuestionGroupImage[]
   questions  Question[]
+}
+
+model QuestionGroupImage {
+  id              String        @id @default(uuid())
+  questionGroupId String
+  questionGroup   QuestionGroup @relation(fields: [questionGroupId], references: [id], onDelete: Cascade)
+  order           Int           @default(0)
+  imageUrl        String
+  textRegions     Json?
+  sourcePage      Int?
+  createdAt       DateTime      @default(now())
 }
 
 model Question {
@@ -150,27 +162,33 @@ model Option {
 }
 
 model TestAttempt {
-  id            String         @id @default(uuid())
-  userId        String
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  testId        String
-  test          Test           @relation(fields: [testId], references: [id], onDelete: Cascade)
-  score         Int            @default(0)
-  status        String         @default("STARTED") // "STARTED", "COMPLETED"
-  startedAt     DateTime       @default(now())
-  completedAt   DateTime?
-  answers       Answer[]
-  selectedWords SelectedWord[]
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testId          String
+  test            Test           @relation(fields: [testId], references: [id], onDelete: Cascade)
+  score           Int            @default(0)
+  listeningScore  Int            @default(0)
+  readingScore    Int            @default(0)
+  scopePartNumber Int?
+  status          String         @default("STARTED") // "STARTED", "COMPLETED"
+  startedAt       DateTime       @default(now())
+  completedAt     DateTime?
+  answers         Answer[]
+  selectedWords   SelectedWord[]
 }
 
 model Answer {
-  id             String      @id @default(uuid())
-  testAttemptId  String
-  testAttempt    TestAttempt @relation(fields: [testAttemptId], references: [id], onDelete: Cascade)
-  questionId     String
-  question       Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  selectedOption String // "A", "B", "C", "D"
-  isCorrect      Boolean
+  id                    String      @id @default(uuid())
+  testAttemptId         String
+  testAttempt           TestAttempt @relation(fields: [testAttemptId], references: [id], onDelete: Cascade)
+  questionId            String
+  question              Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedOption        String // "A", "B", "C", "D"
+  isCorrect             Boolean
+  aiExplanation         String?     @db.Text
+  aiExplanationStatus   String      @default("pending")
+  aiGeneratedAt         DateTime?
 }
 
 model SelectedWord {
@@ -184,6 +202,11 @@ model SelectedWord {
   word            String
   sentenceContext String
   partNumber      Int
+  meaningVi       String?     @db.Text
+  example         String?     @db.Text
+  synonyms        Json?
+  aiStatus        String      @default("pending")
+  aiGeneratedAt   DateTime?
   createdAt       DateTime    @default(now())
 }
 

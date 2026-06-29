@@ -43,6 +43,7 @@ import {
   renderPdfPage,
   uploadPart1QuestionImage,
   uploadPassageGroupImage,
+  uploadReadingPageImage,
 } from "./pdfImageService.js";
 export interface ProcessingProgress {
   step: string;
@@ -68,6 +69,7 @@ export interface ParsedToeicPayload {
 export interface PreparedGroupAssetsSerializable {
   imageUrl?: string | null;
   textRegions?: TextRegion[] | null;
+  images?: PreparedGroupImageAsset[];
   questionImages: Record<number, string>;
 }
 
@@ -77,12 +79,21 @@ export interface ImportOptions {
   examType?: string;
   /** Pre-built assets from save_assets (PyMuPDF pipeline). Skips prepareImportAssets when set. */
   preparedAssetsOverride?: Map<string, PreparedGroupAssets>;
+  /** Optional hook for import detail lines (shown in admin progress log). */
+  onImportLog?: (detail: string) => void;
 }
 
 interface PreparedGroupAssets {
   imageUrl?: string | null;
   textRegions?: TextRegion[] | null;
+  images?: PreparedGroupImageAsset[];
   questionImages: Map<number, string>;
+}
+
+interface PreparedGroupImageAsset {
+  imageUrl: string;
+  textRegions?: TextRegion[] | null;
+  sourcePage?: number | null;
 }
 
 export function serializePreparedAssets(
@@ -93,6 +104,7 @@ export function serializePreparedAssets(
     out[key] = {
       imageUrl: entry.imageUrl,
       textRegions: entry.textRegions,
+      images: entry.images,
       questionImages: Object.fromEntries(entry.questionImages),
     };
   }
@@ -108,6 +120,7 @@ export function deserializePreparedAssets(
     map.set(key, {
       imageUrl: entry.imageUrl,
       textRegions: entry.textRegions,
+      images: entry.images,
       questionImages: new Map(Object.entries(entry.questionImages).map(([k, v]) => [Number(k), v])),
     });
   }
@@ -130,8 +143,32 @@ const PART_TITLES: Record<number, string> = {
   7: "Đọc hiểu",
 };
 
+const EXPECTED_QUESTIONS_PER_PART: Record<number, number> = {
+  1: 6,
+  2: 25,
+  3: 39,
+  4: 30,
+  5: 30,
+  6: 16,
+  7: 54,
+};
+
+function questionTextCharCount(text: string): number {
+  return text.trim().length;
+}
+
+function emitImportLog(options: ImportOptions, detail: string): void {
+  console.log(`[TOEIC import] ${detail}`);
+  options.onImportLog?.(detail);
+}
+
 function groupAssetKey(partNumber: number, groupIndex: number): string {
   return `${partNumber}-${groupIndex}`;
+}
+
+function isFullPageBbox(bbox: NormalizedBbox): boolean {
+  const [x, y, w, h] = bbox;
+  return x <= 0.01 && y <= 0.01 && w >= 0.99 && h >= 0.99;
 }
 
 interface PageCacheEntry {
@@ -236,7 +273,8 @@ async function prepareImportAssets(
 
   for (const parsedPart of parts) {
     const partNum = parsedPart.partNumber;
-    const needsCrop = partNum === 1 || partNum === 6 || partNum === 7;
+    const needsCrop =
+      partNum === 1 || partNum === 3 || partNum === 4 || partNum === 6 || partNum === 7;
     if (!needsCrop) continue;
 
     for (let gIdx = 0; gIdx < parsedPart.groups.length; gIdx++) {
@@ -245,7 +283,7 @@ async function prepareImportAssets(
       const entry: PreparedGroupAssets = { questionImages: new Map() };
       assets.set(key, entry);
 
-      const sourcePage = group.sourcePage;
+      const sourcePage = group.sourcePage ?? group.sourcePages?.[0];
       if (!sourcePage) continue;
 
       const pagePng = await getPagePng(sourcePage);
@@ -270,6 +308,23 @@ async function prepareImportAssets(
           continue;
         }
 
+        if (partNum === 3 || partNum === 4) {
+          const bbox = group.imageBbox
+            ? clampBbox(group.imageBbox)
+            : await resolveGroupImageBbox(group, partNum, pagePng);
+          if (!bbox) continue;
+
+          const cropped = await cropPngBuffer(pagePng, bbox);
+          entry.imageUrl = await uploadPassageGroupImage(
+            examType,
+            testId,
+            partNum,
+            gIdx,
+            cropped
+          );
+          continue;
+        }
+
         if (partNum === 6 || partNum === 7) {
           // 1) Scan full page text regions before crop
           const pageRegions = await getPageTextRegions(sourcePage, pagePng);
@@ -277,6 +332,35 @@ async function prepareImportAssets(
           // 2) Resolve passage/photo bbox
           const bbox = await resolveGroupImageBbox(group, partNum, pagePng);
           if (!bbox) continue;
+
+          const sourcePages =
+            group.sourcePages && group.sourcePages.length > 0
+              ? [...new Set(group.sourcePages)]
+              : [sourcePage];
+
+          if (isFullPageBbox(bbox)) {
+            for (const pageNumber of sourcePages) {
+              const fullPagePng = await getPagePng(pageNumber);
+              if (!fullPagePng) continue;
+              const fullPageRegions = await getPageTextRegions(pageNumber, fullPagePng);
+              const imageUrl = await uploadReadingPageImage(
+                examType,
+                testId,
+                partNum,
+                pageNumber,
+                fullPagePng
+              );
+              const asset: PreparedGroupImageAsset = {
+                imageUrl,
+                textRegions: fullPageRegions.length ? fullPageRegions : null,
+                sourcePage: pageNumber,
+              };
+              entry.images = [...(entry.images ?? []), asset];
+              entry.imageUrl ??= asset.imageUrl;
+              entry.textRegions ??= asset.textRegions;
+            }
+            continue;
+          }
 
           // 3) Crop passage image for S3
           const cropped = await cropPngBuffer(pagePng, bbox);
@@ -311,6 +395,13 @@ async function prepareImportAssets(
             cropped
           );
           entry.textRegions = textRegions.length ? textRegions : null;
+          entry.images = [
+            {
+              imageUrl: entry.imageUrl,
+              textRegions: entry.textRegions,
+              sourcePage,
+            },
+          ];
         }
       } catch (error) {
         console.warn(
@@ -371,12 +462,12 @@ async function resolveExamTranscriptTexts(
 
   if (!examText) {
     throw new Error(
-      "Không trích được text từ file đề thi (EXAM_PDF). Kiểm tra PDF scan/ảnh hoặc MarkItDown."
+      "Không trích được text từ file đề thi (EXAM_PDF). Kiểm tra PDF scan/ảnh hoặc PyMuPDF."
     );
   }
   if (!transcriptText) {
     throw new Error(
-      "Không trích được text từ KEY LC + Transcript. Kiểm tra PDF hoặc bật MARKITDOWN_URL."
+      "Không trích được text từ KEY LC + Transcript. Kiểm tra PDF hoặc PyMuPDF."
     );
   }
 
@@ -560,6 +651,7 @@ export async function processToeicExamResumable(
           overwriteExisting: true,
           examPdfBuffer: examBuffer,
           examType: test.examType,
+          onImportLog: (detail) => log("save_db", detail),
         }
       );
     },
@@ -603,15 +695,7 @@ export function validateToeicStructure(parts: ParsedPart[]): void {
   }
 
   const questionNumbers: number[] = [];
-  const expectedPerPart: Record<number, number> = {
-    1: 6,
-    2: 25,
-    3: 39,
-    4: 30,
-    5: 30,
-    6: 16,
-    7: 54,
-  };
+  const expectedPerPart = EXPECTED_QUESTIONS_PER_PART;
   const actualPerPart: Record<number, number> = {
     1: 0,
     2: 0,
@@ -760,6 +844,31 @@ export async function importParsedToeicData(
           },
         });
 
+        const groupImages =
+          assets?.images?.length
+            ? assets.images
+            : assets?.imageUrl
+              ? [
+                  {
+                    imageUrl: assets.imageUrl,
+                    textRegions: assets.textRegions,
+                    sourcePage: group.sourcePage ?? group.sourcePages?.[0] ?? null,
+                  },
+                ]
+              : [];
+
+        if (groupImages.length) {
+          await tx.questionGroupImage.createMany({
+            data: groupImages.map((image, order) => ({
+              questionGroupId: dbGroup.id,
+              order,
+              imageUrl: image.imageUrl,
+              textRegions: image.textRegions ? (image.textRegions as object) : undefined,
+              sourcePage: image.sourcePage ?? null,
+            })),
+          });
+        }
+
         for (const q of group.questions) {
           const questionImage = assets?.questionImages.get(q.questionNumber) || null;
 
@@ -797,11 +906,33 @@ export async function importParsedToeicData(
 
           partQuestionCount++;
           totalQuestions++;
+
+          emitImportLog(
+            options,
+            `Part ${partNum} Q${q.questionNumber}: import OK — ${questionTextCharCount(q.questionText)} chữ`
+          );
         }
       }
 
+      const expected = EXPECTED_QUESTIONS_PER_PART[partNum];
+      const partStatus =
+        expected != null && partQuestionCount === expected
+          ? "đủ"
+          : expected != null
+            ? `${partQuestionCount}/${expected}`
+            : String(partQuestionCount);
+      emitImportLog(
+        options,
+        `Part ${partNum}: ${partQuestionCount} câu import thành công (${partStatus})`
+      );
+
       partsSummary.push({ partNumber: partNum, questionCount: partQuestionCount });
     }
+
+    emitImportLog(
+      options,
+      `Tổng kết: ${totalQuestions} câu — ${partsSummary.map((p) => `P${p.partNumber}=${p.questionCount}`).join(", ")}`
+    );
 
     return { totalQuestions, partsSummary };
   });

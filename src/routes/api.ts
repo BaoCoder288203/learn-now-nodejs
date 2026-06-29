@@ -20,6 +20,7 @@ import {
 } from "../controllers/vocabController.js";
 import {
   togglePublishTest,
+  deleteTest,
   editQuestion,
   createTestManually,
   getUserStatistics,
@@ -102,6 +103,7 @@ router.delete("/vocab/:vocabId", authenticateJWT, deleteVocabWord);
 // -------------------------------------------------------------
 router.post("/admin/tests/manual", authenticateJWT, requireAdmin, createTestManually);
 router.put("/admin/tests/:testId/publish", authenticateJWT, requireAdmin, togglePublishTest);
+router.delete("/admin/tests/:testId", authenticateJWT, requireAdmin, deleteTest);
 router.put("/admin/questions/:questionId", authenticateJWT, requireAdmin, editQuestion);
 router.get("/admin/stats", authenticateJWT, requireAdmin, getUserStatistics);
 router.post("/admin/tests/import", authenticateJWT, requireAdmin, importToeicExamViaAi);

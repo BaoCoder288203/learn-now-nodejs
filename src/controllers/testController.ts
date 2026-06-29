@@ -2,6 +2,112 @@ import { Response } from "express";
 import { prisma } from "../db.js";
 import { AuthenticatedRequest } from "../middlewares/authMiddleware.js";
 import { getPresignedGetUrl, isS3Key } from "../services/s3Service.js";
+import { computeToeicScore, getScopeQuestions } from "../services/toeicScoringService.js";
+import {
+  enrichSelectedWordsBatch,
+  explainWrongAnswersBatch,
+  type SelectedWordInput,
+  type WrongAnswerInput,
+} from "../services/testResultAiService.js";
+
+async function runAttemptAiEnrichment(attemptId: string): Promise<void> {
+  try {
+    const [selectedWords, wrongAnswers] = await Promise.all([
+      prisma.selectedWord.findMany({
+        where: { testAttemptId: attemptId, aiStatus: { not: "done" } },
+      }),
+      prisma.answer.findMany({
+        where: { testAttemptId: attemptId, isCorrect: false, aiExplanationStatus: { not: "done" } },
+        include: {
+          question: {
+            include: { options: true, testPart: true },
+          },
+        },
+      }),
+    ]);
+
+    if (selectedWords.length > 0) {
+      const wordInputs: SelectedWordInput[] = selectedWords.map((w) => ({
+        id: w.id,
+        word: w.word,
+        sentenceContext: w.sentenceContext,
+        partNumber: w.partNumber,
+      }));
+
+      const enriched = await enrichSelectedWordsBatch(wordInputs);
+      const now = new Date();
+
+      for (const word of selectedWords) {
+        const result = enriched.get(word.word.toLowerCase());
+        if (result) {
+          await prisma.selectedWord.update({
+            where: { id: word.id },
+            data: {
+              meaningVi: result.meaningVi,
+              example: result.example,
+              synonyms: result.synonyms,
+              aiStatus: "done",
+              aiGeneratedAt: now,
+            },
+          });
+        } else {
+          await prisma.selectedWord.update({
+            where: { id: word.id },
+            data: { aiStatus: "failed" },
+          });
+        }
+      }
+    }
+
+    if (wrongAnswers.length > 0) {
+      const answerInputs: WrongAnswerInput[] = wrongAnswers.map((ans) => {
+        const q = ans.question;
+        const selectedOpt = q.options.find(
+          (o) => o.letter.toUpperCase() === ans.selectedOption.toUpperCase()
+        );
+        const correctOpt = q.options.find(
+          (o) => o.letter.toUpperCase() === q.correctAnswer.toUpperCase()
+        );
+        return {
+          id: ans.id,
+          partNumber: q.testPart.partNumber,
+          questionText: q.questionText,
+          passage: q.passage,
+          transcript: q.transcript,
+          selectedOption: ans.selectedOption,
+          selectedOptionText: selectedOpt?.text || "",
+          correctAnswer: q.correctAnswer,
+          correctOptionText: correctOpt?.text || "",
+          options: q.options.map((o) => ({ letter: o.letter, text: o.text })),
+        };
+      });
+
+      const explained = await explainWrongAnswersBatch(answerInputs);
+      const now = new Date();
+
+      for (const ans of wrongAnswers) {
+        const result = explained.get(ans.id);
+        if (result) {
+          await prisma.answer.update({
+            where: { id: ans.id },
+            data: {
+              aiExplanation: result.explanationVi,
+              aiExplanationStatus: "done",
+              aiGeneratedAt: now,
+            },
+          });
+        } else {
+          await prisma.answer.update({
+            where: { id: ans.id },
+            data: { aiExplanationStatus: "failed" },
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[runAttemptAiEnrichment] Error:", err);
+  }
+}
 
 // Retrieve list of published tests
 export async function getTests(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -46,6 +152,9 @@ export async function getTestDetails(req: AuthenticatedRequest, res: Response): 
             questionGroups: {
               orderBy: { groupOrder: "asc" },
               include: {
+                images: {
+                  orderBy: { order: "asc" },
+                },
                 questions: {
                   orderBy: { questionNumber: "asc" },
                   include: { options: { orderBy: { letter: "asc" } } },
@@ -76,22 +185,35 @@ export async function getTestDetails(req: AuthenticatedRequest, res: Response): 
             : part.audioUrl;
 
         const questionGroups = await Promise.all(
-          (part.questionGroups || []).map(async (group) => ({
-            ...group,
-            imageUrl:
-              group.imageUrl && isS3Key(group.imageUrl)
-                ? await getPresignedGetUrl(group.imageUrl, 7200)
-                : group.imageUrl,
-            questions: await Promise.all(
-              group.questions.map(async (question) => ({
-                ...question,
-                image:
-                  question.image && isS3Key(question.image)
-                    ? await getPresignedGetUrl(question.image, 7200)
-                    : question.image,
+          (part.questionGroups || []).map(async (group) => {
+            const images = await Promise.all(
+              (group.images || []).map(async (image) => ({
+                ...image,
+                imageUrl:
+                  image.imageUrl && isS3Key(image.imageUrl)
+                    ? await getPresignedGetUrl(image.imageUrl, 7200)
+                    : image.imageUrl,
               }))
-            ),
-          }))
+            );
+
+            return {
+              ...group,
+              imageUrl:
+                group.imageUrl && isS3Key(group.imageUrl)
+                  ? await getPresignedGetUrl(group.imageUrl, 7200)
+                  : group.imageUrl,
+              images,
+              questions: await Promise.all(
+                group.questions.map(async (question) => ({
+                  ...question,
+                  image:
+                    question.image && isS3Key(question.image)
+                      ? await getPresignedGetUrl(question.image, 7200)
+                      : question.image,
+                }))
+              ),
+            };
+          })
         );
 
         const questions = await Promise.all(
@@ -117,11 +239,21 @@ export async function getTestDetails(req: AuthenticatedRequest, res: Response): 
 
 // Start a test attempt
 export async function startTestAttempt(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const { testId } = req.body;
+  const { testId, partNumber } = req.body;
   const userId = req.user?.id;
 
   if (!userId) {
     res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const scopePartNumber =
+    partNumber != null && partNumber !== ""
+      ? Number(partNumber)
+      : null;
+
+  if (scopePartNumber != null && (scopePartNumber < 1 || scopePartNumber > 7 || Number.isNaN(scopePartNumber))) {
+    res.status(400).json({ error: "partNumber must be between 1 and 7." });
     return;
   }
 
@@ -150,7 +282,12 @@ export async function startTestAttempt(req: AuthenticatedRequest, res: Response)
       }
 
       return tx.testAttempt.create({
-        data: { userId, testId, status: "STARTED" },
+        data: {
+          userId,
+          testId,
+          status: "STARTED",
+          scopePartNumber,
+        },
       });
     });
 
@@ -256,16 +393,8 @@ export async function finishTestAttempt(req: AuthenticatedRequest, res: Response
     const attempt = await prisma.testAttempt.findUnique({
       where: { id: attemptId },
       include: {
-        answers: {
-          include: {
-            question: {
-              include: {
-                testPart: true
-              }
-            }
-          }
-        }
-      }
+        answers: true,
+      },
     });
 
     if (!attempt) {
@@ -274,37 +403,27 @@ export async function finishTestAttempt(req: AuthenticatedRequest, res: Response
     }
 
     if (attempt.status === "COMPLETED") {
-      res.json(attempt);
+      const completed = await prisma.testAttempt.findUnique({
+        where: { id: attemptId },
+        include: {
+          answers: {
+            include: {
+              question: {
+                include: { options: true, testPart: true },
+              },
+            },
+          },
+        },
+      });
+      res.json({ attempt: completed });
       return;
     }
 
-    // Dynamic Scoring Logic
-    // Total questions answered
-    let correctListening = 0;
-    let totalListening = 0;
-    let correctReading = 0;
-    let totalReading = 0;
-
-    attempt.answers.forEach((ans) => {
-      const partNum = ans.question.testPart.partNumber;
-      if (partNum >= 1 && partNum <= 4) {
-        totalListening++;
-        if (ans.isCorrect) correctListening++;
-      } else if (partNum >= 5 && partNum <= 7) {
-        totalReading++;
-        if (ans.isCorrect) correctReading++;
-      }
-    });
-
-    // Approximate TOEFL/TOEIC scoring model
-    // 1-4 Listening (Max 100 Qs -> standard 495)
-    // 5-7 Reading (Max 100 Qs -> standard 495)
-    // For this context, standard simple direct scaling:
-    // Listening score = (correctListening / Math.max(1, totalListening)) * 495
-    // Reading score = (correctReading / Math.max(1, totalReading)) * 495
-    const finalScore = Math.round(
-      (totalListening > 0 ? (correctListening / totalListening) * 495 : 0) +
-      (totalReading > 0 ? (correctReading / totalReading) * 495 : 0)
+    const scopeQuestions = await getScopeQuestions(attempt.testId, attempt.scopePartNumber);
+    const scoreResult = computeToeicScore(
+      scopeQuestions,
+      attempt.answers.map((a) => ({ questionId: a.questionId, isCorrect: a.isCorrect })),
+      attempt.scopePartNumber
     );
 
     const completedAttempt = await prisma.$transaction(async (tx) => {
@@ -312,7 +431,9 @@ export async function finishTestAttempt(req: AuthenticatedRequest, res: Response
         where: { id: attemptId },
         data: {
           status: "COMPLETED",
-          score: finalScore || 0,
+          score: scoreResult.totalScore,
+          listeningScore: scoreResult.listeningScore,
+          readingScore: scoreResult.readingScore,
           completedAt: new Date(),
         },
         include: {
@@ -342,6 +463,8 @@ export async function finishTestAttempt(req: AuthenticatedRequest, res: Response
     });
 
     res.json({ message: "Test finished", attempt: completedAttempt });
+
+    void runAttemptAiEnrichment(attemptId);
   } catch (error) {
     console.error("Finish test error:", error);
     res.status(500).json({ error: "Failed to finalize test attempt." });
@@ -416,7 +539,14 @@ export async function getAttemptResult(req: AuthenticatedRequest, res: Response)
       return;
     }
 
-    res.json({ attempt });
+    const scopeQuestions = await getScopeQuestions(attempt.testId, attempt.scopePartNumber);
+    const scoreBreakdown = computeToeicScore(
+      scopeQuestions,
+      attempt.answers.map((a) => ({ questionId: a.questionId, isCorrect: a.isCorrect })),
+      attempt.scopePartNumber
+    );
+
+    res.json({ attempt, scoreBreakdown });
   } catch (error) {
     console.error("Get attempt result error:", error);
     res.status(500).json({ error: "Không thể tải kết quả bài thi." });
