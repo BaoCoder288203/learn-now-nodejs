@@ -84,48 +84,6 @@ PART2
   });
 });
 
-describe("parseListeningParts Part 3/4", () => {
-  it("keeps wrapped graphic question lines together", () => {
-    const fixture = `
-PART 3
-32 (A)
-33 (B)
-34 (C)
-
-32.
-Look at the graphic. Which parking area w ill be
-closed?
-(A) Area A
-(B) Area B
-(C) Area C
-(D) Area D
-33.
-What does the speaker suggest?
-(A) Calling a client
-(B) Moving a car
-(C) Sending a form
-(D) Reading a notice
-34.
-When will the work begin?
-(A) On Monday
-(B) On Tuesday
-(C) On Wednesday
-(D) On Thursday
-PART 4
-71 (A)
-`;
-
-    const parts = parseListeningParts(fixture, "");
-    const part3 = parts.find((p) => p.partNumber === 3)!;
-    const q32 = part3.groups[0]!.questions[0]!;
-
-    assert.equal(
-      q32.questionText,
-      "Look at the graphic. Which parking area w ill be closed?"
-    );
-  });
-});
-
 describe("part1ParserInternals", () => {
   it("extracts 4-option English sets from PART1 section", () => {
     const sets = part1ParserInternals.extractPart1PhotoOptionSets(`

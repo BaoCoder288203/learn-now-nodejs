@@ -8,19 +8,6 @@ export const PART_RANGES: Record<number, { start: number; end: number; perGroup?
   7: { start: 147, end: 200 },
 };
 
-/** Part 3: last 3 groups (Q62–70). Part 4: last 2 groups (Q95–100). */
-export const LISTENING_GRAPHIC_GROUP_STARTS: Record<3 | 4, readonly number[]> = {
-  3: [62, 65, 68],
-  4: [92, 95, 98],
-};
-
-export const GRAPHIC_QUESTION_CUE_RE =
-  /Look at the graphic|refer to the (chart|table|schedule|form|e-mail|email|notice)/i;
-
-export function isListeningGraphicGroup(part: 3 | 4, startQ: number): boolean {
-  return LISTENING_GRAPHIC_GROUP_STARTS[part].includes(startQ);
-}
-
 export const OPTION_LINE_RE =
   /^\s*\(?([A-D])\)?\s*[\.\)]\s*(.+)$/i;
 

@@ -18,7 +18,6 @@ export interface ParsedGroup {
   transcript?: string;
   imageDescription?: string;
   sourcePage?: number;
-  sourcePages?: number[];
   /** Crop rectangle on sourcePage for Part 1 photo or Part 6/7 passage block. */
   imageBbox?: NormalizedBbox;
   questions: ParsedQuestion[];

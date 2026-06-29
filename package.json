@@ -11,7 +11,11 @@
     "db:push": "prisma db push",
     "postinstall": "prisma generate",
     "lint": "tsc --noEmit",
+<<<<<<< HEAD
     "test": "tsx --test src/services/imageCropService.test.ts src/services/toeicScoringService.test.ts src/services/toeicRuleParser/keyRc.test.ts src/services/toeicRuleParser/listening.test.ts src/services/toeicRuleParser/columnLayout.test.ts src/services/toeicRuleParser/layoutBbox.test.ts src/services/toeicRuleParser/de3.integration.test.ts src/services/toeicRuleParser/de4.integration.test.ts src/services/toeicRuleParser/de5.integration.test.ts src/services/pymupdfClient.test.ts"
+=======
+    "test": "tsx --test src/services/imageCropService.test.ts src/services/toeicRuleParser/keyRc.test.ts src/services/toeicRuleParser/listening.test.ts src/services/toeicRuleParser/de3.integration.test.ts src/services/pymupdfClient.test.ts"
+>>>>>>> fa9d0622ed77d956e00632a6196f5b9108303e9c
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1054.0",

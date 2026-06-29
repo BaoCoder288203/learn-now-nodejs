@@ -327,7 +327,10 @@ function parseListeningKeySection(
     const questionText =
       partNumber === 2
         ? extractPart2QuestionText(block, q)
-        : extractPart34QuestionText(block, q);
+        : (() => {
+            const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
+            return lines.find((l) => !OPTION_LINE_RE.test(normalizeOptionLine(l))) ?? lines[0] ?? `Question ${q}`;
+          })();
     const options = extractOptionsFromSection(block);
     const perGroup = range.perGroup ?? 1;
 
@@ -380,29 +383,6 @@ function extractOptionsFromSection(block: string): string[] {
     }
   }
   return options.filter(Boolean);
-}
-
-function extractPart34QuestionText(block: string, q: number): string {
-  const questionLines: string[] = [];
-
-  for (const rawLine of block.split("\n")) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    if (isAnswerKeyLine(line)) continue;
-    if (OPTION_LINE_RE.test(normalizeOptionLine(line))) break;
-    if (/^\([A-D]\)/i.test(line)) break;
-    if (/\([A-D]\)\s*[^(\n]+/i.test(line)) break;
-    if (/^(?:W|M)\s*[-–]/i.test(line)) continue;
-
-    questionLines.push(line);
-  }
-
-  const questionText = questionLines
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  return questionText || `Question ${q}`;
 }
 
 function extractQuestionBlock(sectionText: string, q: number, nextQ: number, isLastInSection: boolean): string {

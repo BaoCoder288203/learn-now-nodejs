@@ -196,7 +196,6 @@ export function convertRawPartToParsed(
       passage: group.passage,
       transcript: group.transcript,
       sourcePage: group.sourcePage,
-      sourcePages: group.sourcePages,
       imageBbox: group.imageBbox,
       questions: group.questions
         .filter(

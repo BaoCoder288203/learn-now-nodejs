@@ -7,10 +7,7 @@ import {
   parseReadingPart7Chunk,
 } from "./reading.js";
 import { parseListeningParts } from "./listening.js";
-import {
-  attachListeningGroupVisuals,
-  repairListeningQuestionsFromLayout,
-} from "./passageExtract.js";
+import { attachListeningGroupVisuals } from "./passageExtract.js";
 import type { RawToeicDocument, RawToeicPart, ToeicParserInput } from "./types.js";
 
 export type { RawToeicDocument, RawToeicPart, ToeicParserInput, PyMuPdfExtractResult } from "./types.js";
@@ -22,10 +19,6 @@ export {
   parseReadingPart7Chunk,
 } from "./reading.js";
 export { parseListeningParts } from "./listening.js";
-export {
-  attachListeningGroupVisuals,
-  repairListeningQuestionsFromLayout,
-} from "./passageExtract.js";
 
 export const PART7_CHUNK_RANGES = [
   { start: 147, end: 153 },
@@ -75,14 +68,9 @@ export function parseToeicDocument(input: ToeicParserInput): RawToeicDocument {
   const parts: RawToeicPart[] = listening.map((p) => {
     if (p.partNumber === 1) return part1;
     if (p.partNumber === 3 || p.partNumber === 4) {
-      const repaired = repairListeningQuestionsFromLayout(
-        p.groups,
-        input.examLayout,
-        p.partNumber
-      );
       return {
         ...p,
-        groups: attachListeningGroupVisuals(repaired, input.examLayout, p.partNumber),
+        groups: attachListeningGroupVisuals(p.groups, input.examLayout, p.partNumber),
       };
     }
     return p;

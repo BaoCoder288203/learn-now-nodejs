@@ -13,7 +13,6 @@ export interface RawToeicGroup {
   passage?: string;
   transcript?: string;
   sourcePage?: number;
-  sourcePages?: number[];
   imageBbox?: NormalizedBbox;
   questions: RawToeicQuestion[];
 }
