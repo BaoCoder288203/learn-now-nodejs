@@ -18,6 +18,7 @@ services:
       retries: 5
       start_period: 30s
 
+  # --- MarkItDown (deprecated — không dùng nữa, pipeline dùng PyMuPDF) ---
   # markitdown:
   #   build:
   #     context: ./markitdown-sidecar
@@ -65,8 +66,8 @@ services:
       - PYMUPDF_URL=${PYMUPDF_URL:-http://pymupdf:8081}
       - PYMUPDF_TIMEOUT_MS=${PYMUPDF_TIMEOUT_MS:-120000}
       - USE_PYMUPDF_PIPELINE=${USE_PYMUPDF_PIPELINE:-true}
-      - MARKITDOWN_URL=${MARKITDOWN_URL:-http://markitdown:8080}
-      - MARKITDOWN_TIMEOUT_MS=${MARKITDOWN_TIMEOUT_MS:-120000}
+      # - MARKITDOWN_URL=${MARKITDOWN_URL:-http://markitdown:8080}
+      # - MARKITDOWN_TIMEOUT_MS=${MARKITDOWN_TIMEOUT_MS:-120000}
       - HEADROOM_ENABLED=${HEADROOM_ENABLED:-true}
       - HEADROOM_BASE_URL=${HEADROOM_BASE_URL:-http://headroom:8787}
       - HEADROOM_MIN_CHARS=${HEADROOM_MIN_CHARS:-2000}
@@ -93,8 +94,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      markitdown:
-        condition: service_healthy
+      # markitdown:
+      #   condition: service_healthy
       pymupdf:
         condition: service_healthy
       headroom:

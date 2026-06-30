@@ -156,21 +156,45 @@ export async function pymupdfClipPage(
 
 const WORD_RE = /^[A-Za-z][A-Za-z'-]{0,24}$/;
 
-/** Build clickable text regions from PyMuPDF spans (Part 6/7). */
+function wordBboxWithinSpan(
+  span: PyMuPdfSpan,
+  wordStart: number,
+  wordEnd: number
+): NormalizedBbox {
+  const [sx, sy, sw, sh] = span.bbox;
+  const textLen = Math.max(span.text.length, 1);
+  const relStart = wordStart / textLen;
+  const relEnd = wordEnd / textLen;
+  const pad = 0.001;
+  const x = sx + sw * relStart;
+  const w = Math.max(sw * (relEnd - relStart), 0.005);
+  return [Math.max(0, x - pad), sy, Math.min(1 - x, w + pad * 2), sh];
+}
+
+/** Build clickable text regions from PyMuPDF spans (Part 5–7). */
 export function spansToTextRegions(spans: PyMuPdfSpan[], prefix = "r"): TextRegion[] {
   const regions: TextRegion[] = [];
   let idx = 0;
+
   for (const span of spans) {
-    const words = span.text.split(/\s+/).filter(Boolean);
-    if (words.length === 1 && WORD_RE.test(words[0]!)) {
-      regions.push({ id: `${prefix}${++idx}`, text: words[0]!, bbox: span.bbox });
-      continue;
-    }
-    for (const word of words) {
-      const cleaned = word.replace(/[.,/#!$%^&*;:{}=\-_`~()?"\n]/g, "").trim();
+    const text = span.text;
+    if (!text.trim()) continue;
+
+    const matches = [...text.matchAll(/\S+/g)];
+    for (const match of matches) {
+      const raw = match[0]!;
+      const cleaned = raw.replace(/[.,/#!$%^&*;:{}=\-_`~()?"\n]/g, "").trim();
       if (!cleaned || !WORD_RE.test(cleaned)) continue;
-      regions.push({ id: `${prefix}${++idx}`, text: cleaned, bbox: span.bbox });
+
+      const start = match.index ?? 0;
+      const end = start + raw.length;
+      regions.push({
+        id: `${prefix}${++idx}`,
+        text: cleaned,
+        bbox: wordBboxWithinSpan(span, start, end),
+      });
     }
   }
+
   return regions;
 }

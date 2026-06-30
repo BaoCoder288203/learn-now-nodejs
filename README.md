@@ -66,8 +66,11 @@ API runs at **http://localhost:4000** (default).
 | `GEMINI_MODEL_FALLBACKS` | Comma-separated fallback models when quota/503; default `gemini-2.0-flash,gemini-2.0-flash-lite` |
 | `GEMINI_MAX_OUTPUT_TOKENS` | Optional; default `65536`        |
 | `AUTO_IMPORT_THRESHOLD`| Optional; min confidence (0–1) to skip admin review; default `0.85` |
-| `MARKITDOWN_URL`         | MarkItDown sidecar URL (`http://markitdown:8080` in Docker Compose; `http://localhost:8080` if API chạy ngoài Docker). Để trống = chỉ dùng pdf-parse |
-| `MARKITDOWN_TIMEOUT_MS`  | Optional; timeout gọi sidecar (default `120000`) |
+| `PYMUPDF_URL`            | PyMuPDF sidecar (`http://pymupdf:8081` in Docker Compose) |
+| `USE_PYMUPDF_PIPELINE`   | `true` (default) — rule-based TOEIC import qua PyMuPDF |
+| `PYMUPDF_TIMEOUT_MS`     | Optional; timeout gọi sidecar (default `120000`) |
+| ~~`MARKITDOWN_URL`~~         | *(deprecated)* MarkItDown sidecar — không dùng nữa |
+| ~~`MARKITDOWN_TIMEOUT_MS`~~  | *(deprecated)* |
 | `AI_ENABLE_STREAMING`    | `true` (default) — stream JSON; on truncate, handoff partial sang provider kế |
 | `HEADROOM_BASE_URL`      | Headroom proxy (`http://headroom:8787` trong Compose; `http://127.0.0.1:8787` nếu API dev + proxy Docker). Để trống hoặc `HEADROOM_ENABLED=false` = tắt nén |
 | `HEADROOM_MIN_CHARS`     | Chỉ nén prompt text ≥ N ký tự (default `2000`). Vision (KEY RC ảnh) không nén |
@@ -86,7 +89,7 @@ POST /api/admin/import-jobs/:jobId/resume
 
 Log: `[Pipeline] step=parse_listening_2 status=skip` (đã checkpoint) hoặc `status=run`.
 
-### Docker Compose (API + Postgres + Redis + MarkItDown + Headroom)
+### Docker Compose (API + Postgres + Redis + PyMuPDF + Headroom)
 
 ```bash
 docker compose up -d --build
@@ -95,22 +98,28 @@ docker compose up -d --build
 | Service | Port | Mô tả |
 |---------|------|--------|
 | `api` | 4000 | Node.js API |
-| `markitdown` | 8080 | Python sidecar — `POST /convert`, `GET /health` |
+| `pymupdf` | 8081 | Python sidecar — layout/text/clip PDF |
 | `headroom` | 8787 | Context compression proxy — nén prompt text trước Alibaba/OpenAI |
 | `db` | 5432 | PostgreSQL |
 | `redis` | 6379 | Redis |
+| ~~`markitdown`~~ | ~~8080~~ | *(deprecated)* Python MarkItDown sidecar |
 
 Chỉ chạy sidecar (dev local, API bằng `npm run dev`):
 
 ```bash
-docker compose up -d markitdown headroom
-# .env: MARKITDOWN_URL=http://localhost:8080
+docker compose up -d pymupdf headroom
+# .env: PYMUPDF_URL=http://localhost:8081
 # .env: HEADROOM_BASE_URL=http://127.0.0.1:8787
 ```
 
+<!-- MarkItDown deprecated:
+docker compose up -d markitdown headroom
+# .env: MARKITDOWN_URL=http://localhost:8080
+-->
+
 Hoặc proxy Headroom riêng: `docker run -d --name headroom -p 8787:8787 ghcr.io/chopratejas/headroom:latest`
 
-Tắt MarkItDown (chỉ pdf-parse): trong `.env` set `MARKITDOWN_URL=` (rỗng) và bỏ `depends_on` markitdown hoặc không start service `markitdown`.
+<!-- MarkItDown deprecated: set MARKITDOWN_URL= và bỏ depends_on markitdown -->
 
 
 Upload paths are derived from `Test.examType` (`TOEIC` → `toeic`, `IELTS` → `ielts`):
