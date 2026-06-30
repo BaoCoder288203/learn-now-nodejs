@@ -211,6 +211,16 @@ function normalizeGroup(raw: unknown, index: number): ParsedGroup {
     sourcePageRaw != null && Number.isFinite(Number(sourcePageRaw))
       ? Number(sourcePageRaw)
       : undefined;
+  const sourcePagesRaw = rec.sourcePages ?? rec.pages ?? rec.pageNumbers;
+  const sourcePages = Array.isArray(sourcePagesRaw)
+    ? [
+        ...new Set(
+          sourcePagesRaw
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value) && value >= 1)
+        ),
+      ]
+    : undefined;
 
   const imageBbox = coerceImageBbox(
     rec.imageBbox ?? rec.passageBbox ?? rec.bbox ?? rec.cropBox
@@ -220,6 +230,7 @@ function normalizeGroup(raw: unknown, index: number): ParsedGroup {
     passage,
     transcript,
     sourcePage,
+    sourcePages,
     imageBbox,
     questions,
   };

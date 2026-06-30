@@ -6,4 +6,4 @@ dist/
 .env.local
 prisma/*.db
 prisma/*.db-journal
-markitdown-sidecar/
+# markitdown-sidecar/

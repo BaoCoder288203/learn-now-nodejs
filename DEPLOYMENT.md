@@ -35,7 +35,8 @@ GitHub Actions (SSH vào EC2)
 EC2 Ubuntu
   ├─ docker compose
   │   ├─ api         (Node.js 20, port 4000)
-  │   ├─ markitdown  (Python MarkItDown sidecar, port 8080)
+  │   ├─ pymupdf     (Python PyMuPDF sidecar, port 8081)
+  │   # ├─ markitdown  (deprecated — Python MarkItDown sidecar, port 8080)
   │   ├─ db          (PostgreSQL 15)
   │   └─ redis       (Redis 7)
   ├─ Nginx        (reverse proxy 80/443 → localhost:4000)
@@ -197,8 +198,12 @@ OPENAI_MODEL_FALLBACKS=gpt-4o,gpt-4.1
 GEMINI_API_KEY=your_gemini_key
 GEMINI_MODEL=gemini-2.5-flash
 
-# MarkItDown (trong Docker Compose: http://markitdown:8080)
-MARKITDOWN_URL=http://markitdown:8080
+# PyMuPDF (trong Docker Compose: http://pymupdf:8081)
+PYMUPDF_URL=http://pymupdf:8081
+USE_PYMUPDF_PIPELINE=true
+
+# MarkItDown (deprecated — không dùng nữa)
+# MARKITDOWN_URL=http://markitdown:8080
 
 # Headroom (Compose: http://headroom:8787)
 HEADROOM_ENABLED=true
@@ -241,7 +246,9 @@ docker compose up -d
 | `OPENAI_API_KEY` | OpenAI (fallback) | |
 | `GEMINI_API_KEY` | Google Gemini (fallback) | |
 | `AI_ENABLE_STREAMING` | Stream JSON, partial handoff | Mặc định bật |
-| `MARKITDOWN_URL` | Sidecar chuyển PDF/DOCX → text | Trong Docker: `http://markitdown:8080` |
+| `PYMUPDF_URL` | Sidecar layout/text PDF | Trong Docker: `http://pymupdf:8081` |
+| `USE_PYMUPDF_PIPELINE` | Rule-based TOEIC import | Mặc định `true` |
+| ~~`MARKITDOWN_URL`~~ | *(deprecated)* Sidecar PDF/DOCX → text | Không dùng nữa |
 | `HEADROOM_BASE_URL` | Proxy nén prompt text (Alibaba/OpenAI) | `http://headroom:8787`; tắt: `HEADROOM_ENABLED=false` |
 | `ALIBABA_MAX_OUTPUT_TOKENS` | Cap output Qwen | Mặc định `8192` |
 | `DEEPSEEK_MAX_OUTPUT_TOKENS` | Cap output DeepSeek | Mặc định `8192` |

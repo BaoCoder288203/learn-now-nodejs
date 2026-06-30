@@ -185,22 +185,35 @@ export async function getTestDetails(req: AuthenticatedRequest, res: Response): 
             : part.audioUrl;
 
         const questionGroups = await Promise.all(
-          (part.questionGroups || []).map(async (group) => ({
-            ...group,
-            imageUrl:
-              group.imageUrl && isS3Key(group.imageUrl)
-                ? await getPresignedGetUrl(group.imageUrl, 7200)
-                : group.imageUrl,
-            questions: await Promise.all(
-              group.questions.map(async (question) => ({
-                ...question,
-                image:
-                  question.image && isS3Key(question.image)
-                    ? await getPresignedGetUrl(question.image, 7200)
-                    : question.image,
+          (part.questionGroups || []).map(async (group) => {
+            const images = await Promise.all(
+              (group.images || []).map(async (image) => ({
+                ...image,
+                imageUrl:
+                  image.imageUrl && isS3Key(image.imageUrl)
+                    ? await getPresignedGetUrl(image.imageUrl, 7200)
+                    : image.imageUrl,
               }))
-            ),
-          }))
+            );
+
+            return {
+              ...group,
+              imageUrl:
+                group.imageUrl && isS3Key(group.imageUrl)
+                  ? await getPresignedGetUrl(group.imageUrl, 7200)
+                  : group.imageUrl,
+              images,
+              questions: await Promise.all(
+                group.questions.map(async (question) => ({
+                  ...question,
+                  image:
+                    question.image && isS3Key(question.image)
+                      ? await getPresignedGetUrl(question.image, 7200)
+                      : question.image,
+                }))
+              ),
+            };
+          })
         );
 
         const questions = await Promise.all(
