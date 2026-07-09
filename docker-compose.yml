@@ -6,9 +6,8 @@ services:
     restart: unless-stopped
 
   pymupdf:
-    build:
-      context: ./pymupdf-sidecar
-      dockerfile: Dockerfile
+    image: ghcr.io/baocoder288203/learn-now-pymupdf:main
+    pull_policy: always
     ports:
       - "8081:8081"
     healthcheck:
@@ -33,9 +32,8 @@ services:
   #     start_period: 30s
 
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/baocoder288203/learn-now-api:main
+    pull_policy: always
     ports:
       - "4000:4000"
     environment:
